@@ -51,6 +51,15 @@ If the repository already contains `.hutao/` history, Hutao can load previous se
 
 ## What is hutao-agent?
 
+`hutao-agent` currently has four layers:
+
+```text
+1. Agent runtime: read files, run commands, edit code
+2. Trace recorder: record prompting / run / edit / commit links
+3. Repo-local storage: store canonical trace in .hutao/manifest.json, .hutao/refs, and .hutao/sessions
+4. Git safety layer: /git stage-trace, auto-stage before git commit, /doctor trace reminders, startup/status-bar reminders
+```
+
 `hutao-agent` is not just a chat log saver. It is a repository-local, Git-native, traceable, forkable, mergeable, and revertable AI coding agent trace system.
 
 A repository should not only store code and Git commit history. It should also be able to store how the project was built step by step by humans and AI.
@@ -654,9 +663,9 @@ Found N Hutao sessions. Use /session to browse and resume.
 
 This means history was discovered and can be browsed or continued through `/session`.
 
-### Automatic trace staging
+### Automatic trace staging and reminders
 
-Before the agent runs `git commit`, Hutao attempts to stage canonical trace data:
+Before the agent runs `git commit` inside Hutao, Hutao attempts to stage canonical trace data:
 
 ```text
 .hutao/manifest.json
@@ -677,6 +686,16 @@ You can also run it manually:
 ```text
 /git stage-trace
 ```
+
+To reduce missed `.hutao` commits from models or external Git tools, Hutao also provides a low-risk reminder layer:
+
+```text
+Startup: warns if canonical trace files are unstaged or untracked
+Status bar: shows hutao trace: unstaged N or the current session
+/doctor: shows canonical trace staged / unstaged / untracked counts and examples
+```
+
+The reminder layer does not automatically `git add`, does not block commits, and does not modify `.git/hooks`. It only tells you when Hutao history may be missed if you commit now.
 
 ### Safer revert preview
 
@@ -1605,10 +1624,22 @@ manifest presence
 session/event readability
 corrupt JSONL
 index health
+canonical trace staged / unstaged / untracked status
+whether /git stage-trace is recommended
 absolute path leaks
 secret-looking leaks
 whether .hutao should be treated as untrusted data
 .pi/extensions risk warning
+```
+
+Example:
+
+```text
+canonical trace status:
+  staged: 0
+  unstaged: 2
+  untracked: 4
+  recommendation: run /git stage-trace before git commit
 ```
 
 ---

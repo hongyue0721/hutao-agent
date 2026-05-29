@@ -51,6 +51,15 @@ hutao
 
 ## 项目定位
 
+`hutao-agent` 当前由四层组成：
+
+```text
+1. Agent runtime：读文件、跑命令、编辑代码
+2. Trace recorder：记录 prompting / run / edit / commit link
+3. Repo-local storage：把 canonical trace 存到 .hutao/manifest.json、.hutao/refs、.hutao/sessions
+4. Git safety layer：/git stage-trace、git commit 前自动 stage、/doctor trace 提醒、启动/状态栏提醒
+```
+
 `hutao-agent` 的目标不是简单保存聊天记录，而是构建一个：
 
 ```text
@@ -657,9 +666,9 @@ Found N Hutao sessions. Use /session to browse and resume.
 
 这表示历史已经被识别，可以用 `/session` 进入菜单浏览和继续。
 
-### 自动暂存 trace
+### 自动暂存 trace 与提醒系统
 
-当 agent 执行 `git commit` 前，Hutao 会尝试自动暂存 canonical trace 数据：
+当 agent 在 Hutao 内部执行 `git commit` 前，Hutao 会尝试自动暂存 canonical trace 数据：
 
 ```text
 .hutao/manifest.json
@@ -680,6 +689,16 @@ Found N Hutao sessions. Use /session to browse and resume.
 ```text
 /git stage-trace
 ```
+
+为了避免模型或外部 Git 操作漏掉 `.hutao`，Hutao 还提供低风险提醒系统：
+
+```text
+启动时：如果 canonical trace 有未暂存/未跟踪文件，会提示运行 /git stage-trace
+状态栏：显示 hutao trace: unstaged N 或当前 session
+/doctor：显示 canonical trace staged / unstaged / untracked 数量和示例
+```
+
+提醒系统不会自动 `git add`，不会阻止 commit，也不会修改 `.git/hooks`。它只告诉你：如果现在提交，Hutao 历史可能漏掉。
 
 ### 更安全的 revert preview
 
@@ -1608,10 +1627,22 @@ manifest 是否存在
 sessions/events 是否可读
 JSONL 是否损坏
 index 是否健康
+canonical trace staged / unstaged / untracked 状态
+是否建议运行 /git stage-trace
 是否有绝对路径泄漏
 是否有疑似 secret 泄漏
 .hutao 是否应视为不可信数据
 .pi/extensions 风险提示
+```
+
+示例：
+
+```text
+canonical trace status:
+  staged: 0
+  unstaged: 2
+  untracked: 4
+  recommendation: run /git stage-trace before git commit
 ```
 
 ---
