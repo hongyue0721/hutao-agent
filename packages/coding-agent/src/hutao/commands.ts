@@ -135,6 +135,80 @@ function pushEventList(
 	if (events.length > 12) lines.push(`  ... ${events.length - 12} more`);
 }
 
+async function selectItem<T>(
+	ctx: ExtensionCommandContext,
+	title: string,
+	items: T[],
+	render: (item: T, index: number) => string,
+): Promise<T | undefined> {
+	if (items.length === 0) return undefined;
+	const labels = items.map((item, index) => `${String(index + 1).padStart(2, "0")}. ${render(item, index)}`);
+	const choice = await ctx.ui.select(title, labels);
+	if (!choice) return undefined;
+	const index = labels.indexOf(choice);
+	return index === -1 ? undefined : items[index];
+}
+
+function sessionSummary(session: { id: string; kind: string; status: string }, events: HutaoEvent[]): string {
+	return `${shortId(session.id)} ${session.kind} ${session.status} promptings=${events.filter((event) => event.session_id === session.id && event.type === "prompting").length} runs=${events.filter((event) => event.session_id === session.id && event.type === "run_finished").length} edits=${events.filter((event) => event.session_id === session.id && event.type === "edit").length} merges=${events.filter((event) => event.session_id === session.id && event.type === "merge").length}`;
+}
+
+async function runSessionAction(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
+	const choice = await ctx.ui.select("Hutao session actions", [
+		"View details",
+		"View promptings",
+		"View runs",
+		"View edits",
+		"Merge wizard",
+		"Merge preview",
+		"Import history",
+		"Apply edits",
+		"Apply final snapshot",
+	]);
+	if (choice === "View details") return sessionCommand(sessionId, ctx);
+	if (choice === "View promptings") return promptingCommand(`--session ${sessionId}`, ctx);
+	if (choice === "View runs") return runCommand(`--session ${sessionId}`, ctx);
+	if (choice === "View edits") return editCommand(`--session ${sessionId}`, ctx);
+	if (choice === "Merge wizard") return runMergeWizard(sessionId, repoRoot, ctx);
+	if (choice === "Merge preview") return mergeCommand(`session ${sessionId}`, ctx);
+	if (choice === "Import history") return mergeCommand(`session ${sessionId} --history`, ctx);
+	if (choice === "Apply edits") return mergeCommand(`session ${sessionId} --apply-edits`, ctx);
+	if (choice === "Apply final snapshot") return mergeCommand(`session ${sessionId} --apply-tree`, ctx);
+	notify(ctx, "Hutao session", ["No action selected."]);
+}
+
+async function runPromptingAction(prompting: HutaoEvent, ctx: ExtensionCommandContext): Promise<void> {
+	const choice = await ctx.ui.select("Hutao prompting actions", [
+		"View detail",
+		"View edits",
+		"Fork before this prompting",
+		"Retry this prompting",
+		"Fork after this prompting",
+	]);
+	if (choice === "View detail") return promptingCommand(String(prompting.id), ctx);
+	if (choice === "View edits") return editCommand(`--prompting ${prompting.id}`, ctx);
+	if (choice === "Fork before this prompting") return forkCommand(`prompting ${prompting.id} --before`, ctx);
+	if (choice === "Retry this prompting") return forkCommand(`prompting ${prompting.id} --retry`, ctx);
+	if (choice === "Fork after this prompting") return forkCommand(`prompting ${prompting.id} --after`, ctx);
+	notify(ctx, "Hutao prompting", ["No action selected."]);
+}
+
+async function runEditAction(edit: HutaoEvent, ctx: ExtensionCommandContext): Promise<void> {
+	const choice = await ctx.ui.select("Hutao edit actions", [
+		"View patch",
+		"View parent prompting",
+		"Continue from after this edit",
+		"Try another way from before this edit",
+		"Preview revert this edit",
+	]);
+	if (choice === "View patch") return editCommand(String(edit.id), ctx);
+	if (choice === "View parent prompting") return promptingCommand(String(edit.parent_prompting), ctx);
+	if (choice === "Continue from after this edit") return forkCommand(`edit ${edit.id} --after`, ctx);
+	if (choice === "Try another way from before this edit") return forkCommand(`edit ${edit.id} --before`, ctx);
+	if (choice === "Preview revert this edit") return editCommand(`revert ${edit.id}`, ctx);
+	notify(ctx, "Hutao edit", ["No action selected."]);
+}
+
 function readJsonlDiagnostics(path: string): { lines: number; corrupt: number } {
 	if (!existsSync(path)) return { lines: 0, corrupt: 0 };
 	let lines = 0;
@@ -159,15 +233,11 @@ export async function sessionCommand(args: string, ctx: ExtensionCommandContext)
 	const events = readEvents(repoRoot);
 	const query = args.trim();
 	if (!query) {
-		notify(
-			ctx,
-			"Hutao sessions",
-			sessions.map(
-				(session) =>
-					`${shortId(session.id)} ${session.kind} ${session.status} promptings=${events.filter((event) => event.session_id === session.id && event.type === "prompting").length} runs=${events.filter((event) => event.session_id === session.id && event.type === "run_finished").length} edits=${events.filter((event) => event.session_id === session.id && event.type === "edit").length} merges=${events.filter((event) => event.session_id === session.id && event.type === "merge").length}`,
-			),
+		const selected = await selectItem(ctx, "Select Hutao session", sessions, (session) =>
+			sessionSummary(session, events),
 		);
-		return;
+		if (!selected) return notify(ctx, "Hutao session", [sessions.length ? "No session selected." : "No Hutao sessions found."]);
+		return runSessionAction(selected.id, repoRoot, ctx);
 	}
 	const session = sessions.find((entry) => entry.id.startsWith(query));
 	if (!session) return notify(ctx, "Hutao session", [`Not found: ${query}`], "warning");
@@ -244,17 +314,14 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 		promptings = promptings.filter((event) => eventText(event).includes(searchText));
 	}
 	if (!query || query.startsWith("--") || parts[0] === "search") {
-		notify(
-			ctx,
-			"Hutao promptings",
-			promptings.slice(-30).map(
-				(event) =>
-					`${shortId(event.id)} ${event.created_at ?? ""} ${String(event.text ?? "")
-						.split(/\r?\n/)[0]
-						?.slice(0, 120)}`,
-			),
+		const selected = await selectItem(ctx, "Select Hutao prompting", promptings.slice(-30), (event) =>
+			`${shortId(event.id)} ${event.created_at ?? ""} ${String(event.text ?? "")
+				.split(/\r?\n/)[0]
+				?.slice(0, 120)}`,
 		);
-		return;
+		if (!selected)
+			return notify(ctx, "Hutao prompting", [promptings.length ? "No prompting selected." : "No promptings found."]);
+		return runPromptingAction(selected, ctx);
 	}
 	const prompting = findEvent(events, query, "prompting");
 	if (!prompting) return notify(ctx, "Hutao prompting", [`Not found: ${query}`], "warning");
@@ -292,8 +359,11 @@ export async function runCommand(args: string, ctx: ExtensionCommandContext): Pr
 	if (!repoRoot) return notify(ctx, "Hutao run", ["Not in a Git repository."], "warning");
 	const events = readEvents(repoRoot);
 	const query = args.trim();
-	const runs = events.filter((event) => event.type === "run_finished" || event.type === "run_started");
-	if (!query) {
+	const parts = query.split(/\s+/).filter(Boolean);
+	const sessionFilter = getFlagValue(parts, "--session");
+	let runs = events.filter((event) => event.type === "run_finished" || event.type === "run_started");
+	if (sessionFilter) runs = runs.filter((run) => String(run.session_id).startsWith(sessionFilter));
+	if (!query || query.startsWith("--")) {
 		notify(
 			ctx,
 			"Hutao runs",
@@ -382,14 +452,11 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		edits = edits.filter((event) => conflictIds.has(String(event.id)) || event.status === "conflict");
 	}
 	if (!query || query.startsWith("--")) {
-		notify(
-			ctx,
-			"Hutao edits",
-			edits
-				.slice(-30)
-				.map((event) => `${shortId(event.id)} ${event.created_at ?? ""} ${stringArray(event.files).join(", ")}`),
+		const selected = await selectItem(ctx, "Select Hutao edit", edits.slice(-30), (event) =>
+			`${shortId(event.id)} ${event.created_at ?? ""} ${stringArray(event.files).join(", ") || firstLine(event.summary)}`,
 		);
-		return;
+		if (!selected) return notify(ctx, "Hutao edit", [edits.length ? "No edit selected." : "No edits found."]);
+		return runEditAction(selected, ctx);
 	}
 	const edit = findEvent(events, query, "edit");
 	if (!edit) return notify(ctx, "Hutao edit", [`Not found: ${query}`], "warning");
@@ -765,54 +832,28 @@ export async function actionCommand(args: string, ctx: ExtensionCommandContext):
 		return notify(ctx, "Hutao action", ["Usage: /action edit|prompting|session|run <id>"], "warning");
 	if (kind === "edit") {
 		const choice = await ctx.ui.select("Hutao edit actions", [
-			"View Patch",
-			"View Parent Prompting",
-			"Fork Before",
-			"Fork After",
-			"Revert",
+			"View patch",
+			"View parent prompting",
+			"Continue from after this edit",
+			"Try another way from before this edit",
+			"Preview revert this edit",
 		]);
-		if (choice === "View Patch") return editCommand(idPrefix, ctx);
+		if (choice === "View patch") return editCommand(idPrefix, ctx);
 		const edit = findEvent(readEvents(repoRoot), idPrefix, "edit");
 		if (!edit) return notify(ctx, "Hutao action", [`Edit not found: ${idPrefix}`], "warning");
-		if (choice === "View Parent Prompting") return promptingCommand(String(edit.parent_prompting), ctx);
-		if (choice === "Fork Before") return forkCommand(`edit ${edit.id} --before`, ctx);
-		if (choice === "Fork After") return forkCommand(`edit ${edit.id} --after`, ctx);
-		if (choice === "Revert") return editCommand(`revert ${edit.id}`, ctx);
+		if (choice === "View parent prompting") return promptingCommand(String(edit.parent_prompting), ctx);
+		if (choice === "Try another way from before this edit") return forkCommand(`edit ${edit.id} --before`, ctx);
+		if (choice === "Continue from after this edit") return forkCommand(`edit ${edit.id} --after`, ctx);
+		if (choice === "Preview revert this edit") return editCommand(`revert ${edit.id}`, ctx);
 		return notify(ctx, "Hutao action", ["No action selected."]);
 	}
 	if (kind === "prompting") {
-		const choice = await ctx.ui.select("Hutao prompting actions", [
-			"View Detail",
-			"View Edits",
-			"Fork Before",
-			"Retry",
-			"Fork After",
-		]);
 		const prompting = findEvent(readEvents(repoRoot), idPrefix, "prompting");
 		if (!prompting) return notify(ctx, "Hutao action", [`Prompting not found: ${idPrefix}`], "warning");
-		if (choice === "View Detail") return promptingCommand(String(prompting.id), ctx);
-		if (choice === "View Edits") return editCommand(`--prompting ${prompting.id}`, ctx);
-		if (choice === "Fork Before") return forkCommand(`prompting ${prompting.id} --before`, ctx);
-		if (choice === "Retry") return forkCommand(`prompting ${prompting.id} --retry`, ctx);
-		if (choice === "Fork After") return forkCommand(`prompting ${prompting.id} --after`, ctx);
-		return notify(ctx, "Hutao action", ["No action selected."]);
+		return runPromptingAction(prompting, ctx);
 	}
 	if (kind === "session") {
-		const choice = await ctx.ui.select("Hutao session actions", [
-			"View Detail",
-			"Merge Wizard",
-			"Merge Preview",
-			"Import History",
-			"Apply Edits",
-			"Apply Final Snapshot",
-		]);
-		if (choice === "View Detail") return sessionCommand(idPrefix, ctx);
-		if (choice === "Merge Wizard") return runMergeWizard(idPrefix, repoRoot, ctx);
-		if (choice === "Merge Preview") return mergeCommand(`session ${idPrefix}`, ctx);
-		if (choice === "Import History") return mergeCommand(`session ${idPrefix} --history`, ctx);
-		if (choice === "Apply Edits") return mergeCommand(`session ${idPrefix} --apply-edits`, ctx);
-		if (choice === "Apply Final Snapshot") return mergeCommand(`session ${idPrefix} --apply-tree`, ctx);
-		return notify(ctx, "Hutao action", ["No action selected."]);
+		return runSessionAction(idPrefix, repoRoot, ctx);
 	}
 	if (kind === "run") return runCommand(idPrefix, ctx);
 	return notify(ctx, "Hutao action", [`Unsupported action kind: ${kind}`], "warning");
