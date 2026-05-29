@@ -10,6 +10,7 @@ import { MergeManager, type MergeMode } from "./merge-manager.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
+import { stageHutaoTrace } from "./trace-stager.ts";
 
 function readEvents(repoRoot: string): HutaoEvent[] {
 	return readAllEvents(repoRoot);
@@ -424,6 +425,17 @@ export async function gitCommand(args: string, ctx: ExtensionCommandContext): Pr
 	if (query === "scan") {
 		const result = await new CommitLinker(repoRoot).scanRecentCommits();
 		notify(ctx, "Hutao git", [`linked commits: ${result.linked}`]);
+		return;
+	}
+	if (query === "stage-trace") {
+		const result = await stageHutaoTrace(repoRoot);
+		const lines = [
+			result.ok ? "Hutao trace staged." : "Hutao trace was not staged.",
+			`staged files: ${result.staged.length}`,
+			...(result.error ? [`error: ${result.error}`] : []),
+			...(result.warnings.length > 0 ? ["warnings:", ...result.warnings] : []),
+		];
+		notify(ctx, "Hutao git", lines, result.ok ? "info" : "warning");
 		return;
 	}
 	const git = new GitAdapter(repoRoot);

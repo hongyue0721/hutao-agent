@@ -44,6 +44,14 @@ function hashText(text: string): string {
 	return `sha256:${createHash("sha256").update(text).digest("hex")}`;
 }
 
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+	return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
+}
+
 export class TraceRecorder {
 	private repoRoot: string;
 	private sessionId: string;
@@ -185,6 +193,16 @@ export class TraceRecorder {
 			if (editId) producedEditIds.push(editId);
 		}
 		if (!event.isError && run.tool === "bash" && run.beforeHead && afterHead && run.beforeHead !== afterHead) {
+			const events = this.store.readEvents();
+			const existingLinkedEditIds = new Set(
+				events.filter((entry) => entry.type === "commit_link").flatMap((entry) => stringArray(entry.edit_ids)),
+			);
+			const unlinkedEdits = events.filter(
+				(entry) => entry.type === "edit" && entry.session_id === this.sessionId && !existingLinkedEditIds.has(String(entry.id)),
+			);
+			const editIds = uniqueStrings([...unlinkedEdits.map((entry) => entry.id), ...producedEditIds]);
+			const runIds = uniqueStrings([...unlinkedEdits.map((entry) => entry.parent_run), run.id]);
+			const promptingIds = uniqueStrings([...unlinkedEdits.map((entry) => entry.parent_prompting), this.activePromptingId]);
 			this.store.append({
 				schema_version: HUTAO_SCHEMA_VERSION,
 				type: "commit_link",
@@ -192,9 +210,9 @@ export class TraceRecorder {
 				session_id: this.sessionId,
 				commit: afterHead,
 				tree: afterTree,
-				prompting_ids: [this.activePromptingId],
-				run_ids: [run.id],
-				edit_ids: producedEditIds,
+				prompting_ids: promptingIds,
+				run_ids: runIds,
+				edit_ids: editIds,
 				link_method: "observed_git_commit",
 				created_at: new Date().toISOString(),
 			});

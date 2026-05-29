@@ -14,6 +14,7 @@ import {
 import { GitAdapter } from "./git-adapter.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
+import { commandNeedsTraceStage, stageHutaoTrace } from "./trace-stager.ts";
 
 const HUTAO_EXTENSION_LOADED = Symbol.for("hutao-agent.trace-extension.loaded");
 
@@ -74,6 +75,20 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 			return { block: true, reason: "Hutao blocked access to protected path" };
 		}
 		if (isToolCallEventType("bash", event)) {
+			if (commandNeedsTraceStage(event.input.command)) {
+				const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
+				if (repoRoot) {
+					const result = await stageHutaoTrace(repoRoot);
+					if (!result.ok) {
+						ctx.ui.notify(
+							`Hutao trace was not staged before git commit.\n${result.error ?? "Unknown error"}\n${result.warnings.join("\n")}`,
+							"warning",
+						);
+					} else if (result.staged.length > 0) {
+						ctx.ui.setStatus("hutao", `hutao trace staged: ${result.staged.length} files`);
+					}
+				}
+			}
 			if (isDangerousCommand(event.input.command)) {
 				const allowed = await ctx.ui.confirm(
 					"Hutao safety",
