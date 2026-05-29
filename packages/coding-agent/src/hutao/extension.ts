@@ -16,7 +16,7 @@ import { GitAdapter } from "./git-adapter.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
-import { commandNeedsTraceStage, stageHutaoTrace } from "./trace-stager.ts";
+import { commandNeedsTraceStage, getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
 
 const HUTAO_EXTENSION_LOADED = Symbol.for("hutao-agent.trace-extension.loaded");
 
@@ -67,13 +67,29 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		const active = await getRecorder(ctx);
 		if (!active) return;
-		ctx.ui.setStatus("hutao", `hutao trace: ${active.getSessionId().slice(0, 18)}`);
 		const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
-		if (!repoRoot || startupNoticeRepos.has(repoRoot)) return;
+		if (!repoRoot) {
+			ctx.ui.setStatus("hutao", `hutao trace: ${active.getSessionId().slice(0, 18)}`);
+			return;
+		}
+		const traceStatus = await getHutaoTraceStatus(repoRoot);
+		ctx.ui.setStatus(
+			"hutao",
+			traceStatus.exists && !traceStatus.clean
+				? `hutao trace: unstaged ${traceStatus.unstaged.length + traceStatus.untracked.length}`
+				: `hutao trace: ${active.getSessionId().slice(0, 18)}`,
+		);
+		if (startupNoticeRepos.has(repoRoot)) return;
 		startupNoticeRepos.add(repoRoot);
 		const sessions = new SessionRegistry(repoRoot).readSessions();
 		if (sessions.length > 0) {
 			ctx.ui.notify(`Found ${sessions.length} Hutao sessions. Use /session to browse and resume.`, "info");
+		}
+		if (traceStatus.exists && (traceStatus.unstaged.length > 0 || traceStatus.untracked.length > 0)) {
+			ctx.ui.notify(
+				`Hutao trace has unstaged canonical files.\nunstaged: ${traceStatus.unstaged.length}\nuntracked: ${traceStatus.untracked.length}\nRun /git stage-trace before committing.`,
+				"warning",
+			);
 		}
 	});
 

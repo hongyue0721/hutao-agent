@@ -11,7 +11,7 @@ import { MergeManager, type MergeMode } from "./merge-manager.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
-import { stageHutaoTrace } from "./trace-stager.ts";
+import { getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
 
 function readEvents(repoRoot: string): HutaoEvent[] {
 	return readAllEvents(repoRoot);
@@ -1000,6 +1000,24 @@ export async function doctorCommand(args: string, ctx: ExtensionCommandContext):
 	const protectedTextLeak = /(?:sk-[A-Za-z0-9_-]{20,}|BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY)/.test(traceText);
 	const piExtensions = existsSync(join(repoRoot, ".pi", "extensions"));
 	const remote = await new GitAdapter(repoRoot).run(["remote", "get-url", "origin"]);
+	const traceStatus = await getHutaoTraceStatus(repoRoot);
+	const traceStatusLines = traceStatus.exists
+		? [
+				"canonical trace status:",
+				`  staged: ${traceStatus.staged.length}`,
+				`  unstaged: ${traceStatus.unstaged.length}`,
+				`  untracked: ${traceStatus.untracked.length}`,
+				...(traceStatus.unstaged.length > 0
+					? [`  unstaged examples: ${traceStatus.unstaged.slice(0, 5).join(", ")}`]
+					: []),
+				...(traceStatus.untracked.length > 0
+					? [`  untracked examples: ${traceStatus.untracked.slice(0, 5).join(", ")}`]
+					: []),
+				...(traceStatus.unstaged.length + traceStatus.untracked.length > 0
+					? ["  recommendation: run /git stage-trace before git commit"]
+					: ["  recommendation: clean"]),
+			]
+		: ["canonical trace status: no .hutao directory"];
 	const lines = [
 		args.trim() === "rebuild" || args.trim() === "--rebuild"
 			? "Index rebuilt."
@@ -1011,11 +1029,19 @@ export async function doctorCommand(args: string, ctx: ExtensionCommandContext):
 		`manifest untrusted flag: ${manifestText.includes('"treat_sessions_as_untrusted_data": true') ? "ok" : "missing"}`,
 		`sessions: ${sessions.length}`,
 		`events: ${events.length}`,
+		...traceStatusLines,
 		`jsonl lines: ${jsonlLines}`,
 		`corrupt jsonl lines: ${corruptJsonl}`,
 		`absolute repo path leak: ${absoluteRepoLeak ? "found" : "none"}`,
 		`secret-looking trace leak: ${protectedTextLeak ? "found" : "none"}`,
 		`.pi/extensions present: ${piExtensions ? "yes - review before trusting third-party repo extensions" : "no"}`,
 	];
-	notify(ctx, "Hutao doctor", lines, corruptJsonl || absoluteRepoLeak || protectedTextLeak ? "warning" : "info");
+	notify(
+		ctx,
+		"Hutao doctor",
+		lines,
+		corruptJsonl || absoluteRepoLeak || protectedTextLeak || traceStatus.unstaged.length || traceStatus.untracked.length
+			? "warning"
+			: "info",
+	);
 }
