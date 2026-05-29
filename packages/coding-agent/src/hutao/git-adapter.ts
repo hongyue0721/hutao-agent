@@ -125,6 +125,13 @@ export class GitAdapter {
 		return this.applyPatch(patchPath);
 	}
 
+	async applyReversePatchText(patch: string): Promise<GitCommandResult> {
+		const patchPath = join(this.cwd, ".hutao", "tmp", `reverse-${process.pid}-${Date.now()}.patch`);
+		mkdirSync(join(this.cwd, ".hutao", "tmp"), { recursive: true });
+		writeFileSync(patchPath, patch, "utf-8");
+		return this.applyReversePatchCheck(patchPath);
+	}
+
 	async getDiffBetweenRefs(fromRef: string, toRef: string): Promise<string> {
 		const result = await this.run(["diff", "--binary", fromRef, toRef], { maxBuffer: 100 * 1024 * 1024 });
 		return result.stdout;

@@ -184,6 +184,28 @@ export class MergeManager {
 		const beforeTree = await this.git.getTree();
 		const check = await this.git.applyPatchText(finalDiff);
 		if (!check.ok) {
+			const reverseCheck = await this.git.applyReversePatchText(finalDiff);
+			if (reverseCheck.ok) {
+				this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "completed", {
+					importedEdits: sourceEdits.map((event) => event.id),
+					appliedEdits: [],
+					skippedEdits: sourceEdits.map((event) => String(event.id)),
+					conflictEdits: [],
+					resolutionEdits: [],
+					beforeTree,
+					afterTree: await this.git.getTree(),
+				});
+				return {
+					ok: true,
+					mode: "apply_tree",
+					message: "Source final snapshot is already present. No code changes were applied.",
+					appliedEdits: [],
+					skippedEdits: sourceEdits.map((event) => String(event.id)),
+					conflictEdits: [],
+					resolutionEdits: [],
+					changedFiles,
+				};
+			}
 			this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "conflict", {
 				importedEdits: sourceEdits.map((event) => event.id),
 				appliedEdits: [],

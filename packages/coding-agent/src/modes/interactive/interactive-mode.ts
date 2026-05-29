@@ -491,7 +491,9 @@ export class InteractiveMode {
 		}));
 
 		// Convert extension commands to SlashCommand format
-		const builtinCommandNames = new Set(slashCommands.map((c) => c.name));
+		const builtinCommandNames = new Set(
+			slashCommands.map((c) => c.name).filter((name) => name !== "session" && name !== "fork"),
+		);
 		const extensionCommands: SlashCommand[] = this.session.extensionRunner
 			.getRegisteredCommands()
 			.filter((cmd) => !builtinCommandNames.has(cmd.name))
@@ -2509,6 +2511,12 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/session") {
+				if (this.isExtensionCommand(text)) {
+					this.editor.addToHistory?.(text);
+					this.editor.setText("");
+					await this.session.prompt(text);
+					return;
+				}
 				this.handleSessionCommand();
 				this.editor.setText("");
 				return;
