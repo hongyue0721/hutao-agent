@@ -14,6 +14,7 @@ import {
 } from "./commands.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
+import { SessionRegistry } from "./session-registry.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
 import { commandNeedsTraceStage, stageHutaoTrace } from "./trace-stager.ts";
 
@@ -25,13 +26,19 @@ type HutaoGlobalState = typeof globalThis & {
 
 let recorder: TraceRecorder | undefined;
 let recorderRepoRoot: string | undefined;
+const startupNoticeRepos = new Set<string>();
 
 async function getRecorder(ctx: ExtensionContext): Promise<TraceRecorder | undefined> {
 	const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
 	if (!repoRoot) return undefined;
-	if (recorder && recorderRepoRoot === repoRoot) return recorder;
+	const registry = new SessionRegistry(repoRoot);
+	const currentSessionId = registry.readCurrentSessionId();
+	if (recorder && recorderRepoRoot === repoRoot && (!currentSessionId || recorder.getSessionId() === currentSessionId)) {
+		return recorder;
+	}
+	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
 	recorderRepoRoot = repoRoot;
-	recorder = new TraceRecorder(repoRoot);
+	recorder = new TraceRecorder(repoRoot, currentMetadata);
 	await recorder.init();
 	return recorder;
 }
@@ -59,7 +66,15 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const active = await getRecorder(ctx);
-		if (active) ctx.ui.setStatus("hutao", `hutao trace: ${active.getSessionId().slice(0, 18)}`);
+		if (!active) return;
+		ctx.ui.setStatus("hutao", `hutao trace: ${active.getSessionId().slice(0, 18)}`);
+		const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
+		if (!repoRoot || startupNoticeRepos.has(repoRoot)) return;
+		startupNoticeRepos.add(repoRoot);
+		const sessions = new SessionRegistry(repoRoot).readSessions();
+		if (sessions.length > 0) {
+			ctx.ui.notify(`Found ${sessions.length} Hutao sessions. Use /session to browse and resume.`, "info");
+		}
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

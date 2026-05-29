@@ -103,6 +103,48 @@ function relatedEditsForRun(events: HutaoEvent[], runId: unknown): HutaoEvent[] 
 	return events.filter((event) => event.type === "edit" && stringArray(event.produced_edit_ids).includes(value));
 }
 
+function editPatchPath(repoRoot: string, edit: HutaoEvent): string | undefined {
+	return typeof edit.patch === "string"
+		? join(repoRoot, ".hutao", "sessions", String(edit.session_id), edit.patch)
+		: undefined;
+}
+
+async function previewRevertEdit(editIdPrefix: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<boolean> {
+	const events = readEvents(repoRoot);
+	const edit = findEvent(events, editIdPrefix, "edit");
+	if (!edit) {
+		notify(ctx, "Hutao revert preview", [`Edit not found: ${editIdPrefix}`], "warning");
+		return false;
+	}
+	const git = new GitAdapter(repoRoot);
+	const files = stringArray(edit.files);
+	const laterRelatedEdits = events.filter(
+		(event) =>
+			event.type === "edit" &&
+			event.session_id === edit.session_id &&
+			event.id !== edit.id &&
+			String(event.created_at ?? "") > String(edit.created_at ?? "") &&
+			stringArray(event.files).some((file) => files.includes(file)),
+	);
+	const patchPath = editPatchPath(repoRoot, edit);
+	const status = await git.getStatusSummary();
+	const reverseCheck = patchPath ? await git.applyReversePatchCheck(patchPath) : undefined;
+	const lines = [
+		`edit: ${edit.id}`,
+		`files: ${files.join(", ") || "none"}`,
+		`working tree: ${status}`,
+		`reverse patch check: ${reverseCheck ? (reverseCheck.ok ? "ok" : "failed") : "no patch"}`,
+		`later related edits touching same files: ${laterRelatedEdits.length}`,
+		...laterRelatedEdits.slice(0, 8).map((event) => `  ${shortId(event.id)} ${stringArray(event.files).join(", ")}`),
+		"",
+		"Applying this revert may affect the current project. Continue only if the preview looks safe.",
+	];
+	if (reverseCheck && !reverseCheck.ok) lines.push("", reverseCheck.stderr || reverseCheck.stdout || "Reverse patch check failed.");
+	notify(ctx, "Hutao revert preview", lines, reverseCheck?.ok === false || status !== "clean" ? "warning" : "info");
+	if (!patchPath || reverseCheck?.ok === false) return false;
+	return ctx.ui.confirm("Hutao revert preview", `Apply reverse patch for edit ${edit.id}?`);
+}
+
 function renderPromptingTree(lines: string[], events: HutaoEvent[], promptings: HutaoEvent[]): void {
 	for (const prompting of promptings) {
 		lines.push(`├─ Prompting ${shortId(prompting.id)} ${eventTitle(prompting)}`);
@@ -154,9 +196,52 @@ function sessionSummary(session: { id: string; kind: string; status: string }, e
 	return `${shortId(session.id)} ${session.kind} ${session.status} promptings=${events.filter((event) => event.session_id === session.id && event.type === "prompting").length} runs=${events.filter((event) => event.session_id === session.id && event.type === "run_finished").length} edits=${events.filter((event) => event.session_id === session.id && event.type === "edit").length} merges=${events.filter((event) => event.session_id === session.id && event.type === "merge").length}`;
 }
 
+async function resumeSession(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
+	const registry = new SessionRegistry(repoRoot);
+	const current = registry.readCurrentSessionId();
+	if (current === sessionId) {
+		notify(ctx, "Hutao resume", [
+			`Current Hutao session is already ${sessionId}.`,
+			"Continue chatting normally; new promptings will be recorded here.",
+		]);
+		return;
+	}
+	const session = registry.readSession(sessionId);
+	if (!session) return notify(ctx, "Hutao resume", [`Session not found: ${sessionId}`], "warning");
+	const continuation = await registry.createContinuationSession(session.id);
+	if (!continuation) return notify(ctx, "Hutao resume", [`Failed to create continuation for ${session.id}`], "warning");
+	rebuildIndex(repoRoot);
+	notify(ctx, "Hutao resume", [
+		`Created continuation forkSession ${continuation.id}`,
+		`parent session: ${session.id}`,
+		"Continue chatting normally; new promptings/runs/edits will be recorded in the continuation session.",
+	]);
+}
+
+async function resumeFromPrompting(prompting: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
+	const result = await new ForkSessionManager(repoRoot).createFork("prompting", String(prompting.id), "after");
+	if (!result.ok) return notify(ctx, "Hutao resume", [result.reason ?? "Resume failed."], "warning");
+	notify(ctx, "Hutao resume", [
+		`Created continuation forkSession ${result.sessionId}`,
+		`from prompting: ${prompting.id}`,
+		"Continue chatting normally; new promptings/runs/edits will be recorded in the continuation session.",
+	]);
+}
+
+async function resumeFromEdit(edit: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
+	const result = await new ForkSessionManager(repoRoot).createFork("edit", String(edit.id), "after");
+	if (!result.ok) return notify(ctx, "Hutao resume", [result.reason ?? "Resume failed."], "warning");
+	notify(ctx, "Hutao resume", [
+		`Created continuation forkSession ${result.sessionId}`,
+		`from edit: ${edit.id}`,
+		"Continue chatting normally; new promptings/runs/edits will be recorded in the continuation session.",
+	]);
+}
+
 async function runSessionAction(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
 	const choice = await selectAction(ctx, repoRoot, "session.action.title", [
 		{ id: "viewDetails", labelKey: "session.action.viewDetails" },
+		{ id: "resume", labelKey: "session.action.resume" },
 		{ id: "viewPromptings", labelKey: "session.action.viewPromptings" },
 		{ id: "viewRuns", labelKey: "session.action.viewRuns" },
 		{ id: "viewEdits", labelKey: "session.action.viewEdits" },
@@ -167,6 +252,7 @@ async function runSessionAction(sessionId: string, repoRoot: string, ctx: Extens
 		{ id: "applyFinalSnapshot", labelKey: "session.action.applyFinalSnapshot" },
 	]);
 	if (choice === "viewDetails") return sessionCommand(sessionId, ctx);
+	if (choice === "resume") return resumeSession(sessionId, repoRoot, ctx);
 	if (choice === "viewPromptings") return promptingCommand(`--session ${sessionId}`, ctx);
 	if (choice === "viewRuns") return runCommand(`--session ${sessionId}`, ctx);
 	if (choice === "viewEdits") return editCommand(`--session ${sessionId}`, ctx);
@@ -181,12 +267,14 @@ async function runSessionAction(sessionId: string, repoRoot: string, ctx: Extens
 async function runPromptingAction(prompting: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
 	const choice = await selectAction(ctx, repoRoot, "prompting.action.title", [
 		{ id: "viewDetail", labelKey: "prompting.action.viewDetail" },
+		{ id: "resumeAfter", labelKey: "prompting.action.resumeAfter" },
 		{ id: "viewEdits", labelKey: "prompting.action.viewEdits" },
 		{ id: "forkBefore", labelKey: "prompting.action.forkBefore" },
 		{ id: "retry", labelKey: "prompting.action.retry" },
 		{ id: "forkAfter", labelKey: "prompting.action.forkAfter" },
 	]);
 	if (choice === "viewDetail") return promptingCommand(String(prompting.id), ctx);
+	if (choice === "resumeAfter") return resumeFromPrompting(prompting, repoRoot, ctx);
 	if (choice === "viewEdits") return editCommand(`--prompting ${prompting.id}`, ctx);
 	if (choice === "forkBefore") return forkCommand(`prompting ${prompting.id} --before`, ctx);
 	if (choice === "retry") return forkCommand(`prompting ${prompting.id} --retry`, ctx);
@@ -204,7 +292,7 @@ async function runEditAction(edit: HutaoEvent, repoRoot: string, ctx: ExtensionC
 	]);
 	if (choice === "viewPatch") return editCommand(String(edit.id), ctx);
 	if (choice === "viewParentPrompting") return promptingCommand(String(edit.parent_prompting), ctx);
-	if (choice === "continueAfter") return forkCommand(`edit ${edit.id} --after`, ctx);
+	if (choice === "continueAfter") return resumeFromEdit(edit, repoRoot, ctx);
 	if (choice === "tryBefore") return forkCommand(`edit ${edit.id} --before`, ctx);
 	if (choice === "previewRevert") return editCommand(`revert ${edit.id}`, ctx);
 	notify(ctx, "Hutao edit", [t(repoRoot, "menu.noAction")]);
@@ -429,10 +517,7 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		const sessions = new SessionRegistry(repoRoot).readSessions();
 		const targetSession = sessions[sessions.length - 1]?.id;
 		if (!targetSession) return notify(ctx, "Hutao edit", ["No Hutao session exists."], "warning");
-		const confirmed = await ctx.ui.confirm(
-			"Hutao revert preview",
-			`Reverse apply edit ${editId}. This may modify the working tree. Continue?`,
-		);
+		const confirmed = await previewRevertEdit(editId, repoRoot, ctx);
 		if (!confirmed) return notify(ctx, "Hutao edit", ["Revert cancelled."]);
 		const result = await new RevertManager(repoRoot).revertEdit(editId, targetSession);
 		if (!result.ok) return notify(ctx, "Hutao edit", [result.reason ?? "Revert failed."], "warning");
