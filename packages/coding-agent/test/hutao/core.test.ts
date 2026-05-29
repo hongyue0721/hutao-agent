@@ -165,6 +165,32 @@ describe("TraceRecorder", () => {
 		) as Array<{ type: string }>;
 		expect(events.some((event) => event.type === "commit_link")).toBe(true);
 	});
+
+	it("records raw tool call and result summaries", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const recorder = new TraceRecorder(repo);
+		await recorder.init();
+		await recorder.recordPrompting("raw summaries", repo);
+		await recorder.recordToolCall("write", "tool_raw", { path: "file.txt" });
+		await recorder.startRun("write", "tool_raw", { path: "file.txt" }, repo);
+		writeFileSync(join(repo, "file.txt"), "raw\n", "utf-8");
+		await recorder.finishRun(
+			{
+				type: "tool_result",
+				toolName: "write",
+				toolCallId: "tool_raw",
+				input: { path: "file.txt" },
+				content: [{ type: "text", text: "raw ok" }],
+				details: undefined,
+				isError: false,
+			},
+			repo,
+		);
+		const raw = readFileSync(join(repo, ".hutao", "sessions", recorder.getSessionId(), "raw.jsonl"), "utf-8");
+		expect(raw).toContain("tool_call_summary");
+		expect(raw).toContain("tool_result_summary");
+	});
 	it("records binary edits as hash-only events", async () => {
 		const repo = makeTempDir();
 		const git = await initRepo(repo);

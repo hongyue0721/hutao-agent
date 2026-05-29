@@ -5,7 +5,7 @@ import { createHutaoId } from "./ids.ts";
 import { rebuildIndex } from "./index-builder.ts";
 import { readAllEvents } from "./read-model.ts";
 
-export type ForkSourceType = "prompting" | "edit";
+export type ForkSourceType = "prompting" | "edit" | "commit";
 export type ForkMode = "before" | "retry" | "after";
 
 export interface ForkSessionResult {
@@ -38,6 +38,7 @@ export class ForkSessionManager {
 			return { ok: false, reason: "Working tree is dirty. Commit, stash, or clean before forking from history." };
 		}
 		const events = readAllEvents(this.repoRoot);
+		if (sourceType === "commit") return this.createCommitFork(sourceIdPrefix);
 		const source = events.find((event) => event.type === sourceType && String(event.id).startsWith(sourceIdPrefix));
 		if (!source) return { ok: false, reason: `Source not found: ${sourceIdPrefix}` };
 		const restore = await this.restoreHistoryState(events, source, sourceType, mode);
@@ -71,6 +72,57 @@ export class ForkSessionManager {
 			fork_from_type: sourceType,
 			fork_from_id: source.id,
 			fork_mode: mode,
+			base_git_head: metadata.base_git_head,
+			base_tree: metadata.base_tree,
+			created_by: "human",
+			reason: metadata.summary,
+			created_at: now,
+		});
+		rebuildIndex(this.repoRoot);
+		return { ok: true, sessionId: forkId };
+	}
+
+	private async createCommitFork(commitPrefix: string): Promise<ForkSessionResult> {
+		const resolved = await this.git.run(["rev-parse", "--verify", commitPrefix]);
+		if (!resolved.ok) return { ok: false, reason: `Commit not found: ${commitPrefix}` };
+		const commit = resolved.stdout.trim();
+		const current = await this.git.getHead();
+		if (current !== commit) {
+			const patch = await this.git.getDiffBetweenRefs(current ?? "HEAD", commit);
+			if (patch.trim()) {
+				const apply = await this.git.applyPatchText(patch);
+				if (!apply.ok) return { ok: false, reason: apply.stderr || apply.stdout };
+			}
+		}
+		const forkId = createHutaoId("fs");
+		const now = new Date().toISOString();
+		const metadata: HutaoSessionMetadata = {
+			schema_version: HUTAO_SCHEMA_VERSION,
+			id: forkId,
+			kind: "forkSession",
+			title: `Fork from commit ${commit.slice(0, 12)}`,
+			created_at: now,
+			updated_at: now,
+			base_git_head: commit,
+			base_tree: await this.git.getCommitTree(commit),
+			current_git_head_at_last_write: await this.git.getHead(),
+			current_tree_at_last_write: await this.git.getTree(),
+			status: "active",
+			parent_session: null,
+			fork_from: { type: "commit", id: commit, mode: "commit" },
+			summary: `Fork created from commit ${commit}`,
+		};
+		const store = new EventStore(this.repoRoot, forkId);
+		store.init(metadata);
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "fork_session",
+			id: forkId,
+			session_id: forkId,
+			parent_session: null,
+			fork_from_type: "commit",
+			fork_from_id: commit,
+			fork_mode: "commit",
 			base_git_head: metadata.base_git_head,
 			base_tree: metadata.base_tree,
 			created_by: "human",

@@ -57,6 +57,8 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		const active = await getRecorder(ctx);
+		if (active) await active.recordToolCall(event.toolName, event.toolCallId, event.input);
 		const path = getPathInput(event);
 		if (path && isProtectedRepoPath(path)) {
 			return { block: true, reason: "Hutao blocked access to protected path" };

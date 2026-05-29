@@ -32,6 +32,29 @@ function findEvent(events: HutaoEvent[], idPrefix: string, type?: string): Hutao
 	return events.find((event) => (!type || event.type === type) && String(event.id).startsWith(idPrefix));
 }
 
+function getFlagValue(parts: string[], flag: string): string | undefined {
+	const index = parts.indexOf(flag);
+	return index === -1 ? undefined : parts[index + 1];
+}
+
+function eventText(event: HutaoEvent): string {
+	return String(event.text ?? event.summary ?? "").toLowerCase();
+}
+
+function eventTouchesFile(event: HutaoEvent, file: string): boolean {
+	return stringArray(event.files).some((entry) => entry === file || entry.endsWith(`/${file}`));
+}
+
+function commitLinkedIds(events: HutaoEvent[], commit: string, field: "prompting_ids" | "edit_ids"): Set<string> {
+	const ids = new Set<string>();
+	for (const event of events.filter(
+		(entry) => entry.type === "commit_link" && String(entry.commit).startsWith(commit),
+	)) {
+		for (const id of stringArray(event[field])) ids.add(id);
+	}
+	return ids;
+}
+
 function getRepoRoot(ctx: ExtensionCommandContext): Promise<string | undefined> {
 	return new GitAdapter(ctx.cwd).getRepoRoot();
 }
@@ -87,9 +110,30 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao prompting", ["Not in a Git repository."], "warning");
 	const events = readEvents(repoRoot);
-	const promptings = events.filter((event) => event.type === "prompting");
+	let promptings = events.filter((event) => event.type === "prompting");
 	const query = args.trim();
-	if (!query) {
+	const parts = query.split(/\s+/).filter(Boolean);
+	const sessionFilter = getFlagValue(parts, "--session");
+	const commitFilter = getFlagValue(parts, "--commit");
+	const fileFilter = getFlagValue(parts, "--file");
+	if (sessionFilter) promptings = promptings.filter((event) => String(event.session_id).startsWith(sessionFilter));
+	if (commitFilter) {
+		const ids = commitLinkedIds(events, commitFilter, "prompting_ids");
+		promptings = promptings.filter((event) => ids.has(String(event.id)));
+	}
+	if (fileFilter) {
+		const promptingIds = new Set(
+			events
+				.filter((event) => event.type === "edit" && eventTouchesFile(event, fileFilter))
+				.map((event) => String(event.parent_prompting)),
+		);
+		promptings = promptings.filter((event) => promptingIds.has(String(event.id)));
+	}
+	if (parts[0] === "search") {
+		const searchText = parts.slice(1).join(" ").toLowerCase();
+		promptings = promptings.filter((event) => eventText(event).includes(searchText));
+	}
+	if (!query || query.startsWith("--") || parts[0] === "search") {
 		notify(
 			ctx,
 			"Hutao promptings",
@@ -128,7 +172,7 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao edit", ["Not in a Git repository."], "warning");
 	const events = readEvents(repoRoot);
-	const edits = events.filter((event) => event.type === "edit");
+	let edits = events.filter((event) => event.type === "edit");
 	const query = args.trim();
 	if (query.startsWith("revert ")) {
 		const editId = query.slice("revert ".length).trim();
@@ -145,7 +189,29 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		notify(ctx, "Hutao edit", [`Reverted edit ${editId} as ${result.revertEditId}`]);
 		return;
 	}
-	if (!query) {
+	const parts = query.split(/\s+/).filter(Boolean);
+	const sessionFilter = getFlagValue(parts, "--session");
+	const promptingFilter = getFlagValue(parts, "--prompting");
+	const commitFilter = getFlagValue(parts, "--commit");
+	const fileFilter = getFlagValue(parts, "--file");
+	if (sessionFilter) edits = edits.filter((event) => String(event.session_id).startsWith(sessionFilter));
+	if (promptingFilter) edits = edits.filter((event) => String(event.parent_prompting).startsWith(promptingFilter));
+	if (commitFilter) {
+		const ids = commitLinkedIds(events, commitFilter, "edit_ids");
+		edits = edits.filter((event) => ids.has(String(event.id)));
+	}
+	if (fileFilter) edits = edits.filter((event) => eventTouchesFile(event, fileFilter));
+	if (parts.includes("--reverted")) {
+		const revertedIds = new Set(
+			events.filter((event) => event.type === "edit_reverted").map((event) => String(event.edit_id)),
+		);
+		edits = edits.filter((event) => revertedIds.has(String(event.id)) || event.status === "reverted");
+	}
+	if (parts.includes("--conflicts")) {
+		const conflictIds = new Set(events.flatMap((event) => stringArray(event.conflict_edits)));
+		edits = edits.filter((event) => conflictIds.has(String(event.id)) || event.status === "conflict");
+	}
+	if (!query || query.startsWith("--")) {
 		notify(
 			ctx,
 			"Hutao edits",
@@ -211,19 +277,21 @@ export async function forkCommand(args: string, ctx: ExtensionCommandContext): P
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao fork", ["Not in a Git repository."], "warning");
 	const parts = args.trim().split(/\s+/).filter(Boolean);
-	if (parts.length < 3)
+	if (parts.length < 2)
 		return notify(
 			ctx,
 			"Hutao fork",
-			["Usage: /fork prompting <id> --before|--retry|--after or /fork edit <id> --before|--after"],
+			[
+				"Usage: /fork prompting <id> --before|--retry|--after, /fork edit <id> --before|--after, or /fork commit <hash>",
+			],
 			"warning",
 		);
-	const [sourceType, sourceId, modeFlag] = parts;
+	const [sourceType, sourceId, modeFlag = "--after"] = parts;
 	const mode = modeFlag.replace(/^--/, "") as "before" | "retry" | "after";
 	if (mode !== "before" && mode !== "retry" && mode !== "after") {
 		return notify(ctx, "Hutao fork", [`Unsupported fork mode: ${modeFlag}`], "warning");
 	}
-	if (sourceType !== "prompting" && sourceType !== "edit") {
+	if (sourceType !== "prompting" && sourceType !== "edit" && sourceType !== "commit") {
 		return notify(ctx, "Hutao fork", [`Unsupported fork source: ${sourceType}`], "warning");
 	}
 	const result = await new ForkSessionManager(repoRoot).createFork(sourceType, sourceId, mode);
@@ -249,13 +317,15 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 	}
 	const sourceIdPrefix = parts[1];
 	if (!sourceIdPrefix) return notify(ctx, "Hutao merge", ["Source session id is required."], "warning");
-	const mode: MergeMode = parts.includes("--history")
-		? "history_only"
-		: parts.includes("--apply-edits")
-			? "apply_edits"
-			: parts.includes("--apply-tree")
-				? "apply_tree"
-				: "preview";
+	const mode: MergeMode = parts.includes("--abort")
+		? "abort"
+		: parts.includes("--history")
+			? "history_only"
+			: parts.includes("--apply-edits")
+				? "apply_edits"
+				: parts.includes("--apply-tree")
+					? "apply_tree"
+					: "preview";
 	const result = await new MergeManager(repoRoot).mergeSession(sourceIdPrefix, mode);
 	const lines = [
 		result.message,

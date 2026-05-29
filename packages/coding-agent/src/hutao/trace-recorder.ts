@@ -105,6 +105,20 @@ export class TraceRecorder {
 		return id;
 	}
 
+	async recordToolCall(tool: string, toolCallId: string, input: unknown): Promise<void> {
+		const inputSummary = summarizeInput(tool, input);
+		const sanitized = sanitizeText(this.paths.redactText(inputSummary.summary), 2000);
+		this.store.appendRaw({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "tool_call_summary",
+			tool,
+			tool_call_id: toolCallId,
+			input_summary: sanitized.text,
+			truncated: sanitized.truncated,
+			created_at: new Date().toISOString(),
+		});
+	}
+
 	async startRun(tool: string, toolCallId: string, input: unknown, cwd: string): Promise<void> {
 		if (!this.activePromptingId) return;
 		const id = createHutaoId("r");
@@ -151,6 +165,17 @@ export class TraceRecorder {
 		if (!run || !this.activePromptingId) return;
 		this.runs.delete(event.toolCallId);
 		const output = sanitizeText(this.paths.redactText(textFromToolResult(event)), 20_000);
+		this.store.appendRaw({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "tool_result_summary",
+			tool: event.toolName,
+			tool_call_id: event.toolCallId,
+			is_error: event.isError,
+			output_summary: output.text.split(/\r?\n/).find(Boolean)?.slice(0, 300) ?? "",
+			output_tail: output.text,
+			truncated: output.truncated,
+			created_at: new Date().toISOString(),
+		});
 		const afterPatch = await this.git.getWorktreeDiff();
 		const afterHead = await this.git.getHead();
 		const afterTree = await this.git.getTree();

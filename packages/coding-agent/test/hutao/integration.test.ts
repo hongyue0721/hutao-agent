@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { editCommand, promptingCommand } from "../../src/hutao/commands.ts";
 import { CommitLinker } from "../../src/hutao/commit-linker.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoEvent } from "../../src/hutao/event-store.ts";
 import { ForkSessionManager } from "../../src/hutao/fork-session-manager.ts";
@@ -62,7 +63,25 @@ function readSessionEvents(repo: string, sessionId: string): HutaoEvent[] {
 		.map((line) => JSON.parse(line) as HutaoEvent);
 }
 
+function makeCommandContext(repo: string): Parameters<typeof promptingCommand>[1] {
+	return {
+		cwd: repo,
+		waitForIdle: async () => undefined,
+		ui: {
+			notify: (message: string) => {
+				commandNotifications.push(message);
+			},
+			confirm: async () => true,
+			select: async () => undefined,
+			input: async () => undefined,
+		},
+	} as unknown as Parameters<typeof promptingCommand>[1];
+}
+
+const commandNotifications: string[] = [];
+
 afterEach(() => {
+	commandNotifications.length = 0;
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -87,6 +106,17 @@ describe("Hutao integration safety", () => {
 		expect(contents).not.toContain("sk-");
 		expect(contents).toContain("[secret-redacted]");
 	});
+	it("filters prompting and edit lists", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "filtered");
+		await promptingCommand(`--session ${recorder.getSessionId()}`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("change to filtered");
+		await promptingCommand("search filtered", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("change to filtered");
+		await editCommand("--file file.txt", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain(editId.slice(0, 20));
+	});
 });
 
 describe("ForkSessionManager", () => {
@@ -104,6 +134,17 @@ describe("ForkSessionManager", () => {
 		const after = await new ForkSessionManager(repo).createFork("edit", editId, "after");
 		expect(after.ok).toBe(true);
 		expect(readFileSync(join(repo, "file.txt"), "utf-8").replace(/\r\n/g, "\n")).toBe("changed\n");
+	});
+	it("forks from commits", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const base = await git.getHead();
+		writeFileSync(join(repo, "file.txt"), "commit-target\n", "utf-8");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "target"]);
+		const result = await new ForkSessionManager(repo).createFork("commit", base ?? "HEAD~1", "after");
+		expect(result.ok).toBe(true);
+		expect(readFileSync(join(repo, "file.txt"), "utf-8").replace(/\r\n/g, "\n")).toBe("base\n");
 	});
 });
 
@@ -127,6 +168,20 @@ describe("MergeManager", () => {
 		expect(result.ok).toBe(true);
 		expect(result.resolutionEdits).toHaveLength(1);
 		expect(readFileSync(join(repo, "file.txt"), "utf-8").replace(/\r\n/g, "\n")).toBe("source-final\n");
+	});
+	it("records abort and captures resolution edits", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder } = await recordFileEdit(repo, "resolution-source");
+		const sourceSession = recorder.getSessionId();
+		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_resolution_target");
+		new EventStore(repo, "sess_resolution_target").init(targetMetadata);
+		const abortResult = await new MergeManager(repo).mergeSession(sourceSession, "abort");
+		expect(abortResult.ok).toBe(true);
+		writeFileSync(join(repo, "file.txt"), "manual-resolution\n", "utf-8");
+		const resolution = await new MergeManager(repo).captureResolutionEdit("sess_resolution_target", sourceSession);
+		expect(resolution.ok).toBe(true);
+		expect(resolution.resolutionEdits).toHaveLength(1);
 	});
 });
 
