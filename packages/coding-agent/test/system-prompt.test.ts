@@ -46,6 +46,18 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("- write:");
 		});
 
+		test("includes Hutao younger-sister persona without emoji", () => {
+			const prompt = buildSystemPrompt({
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).toContain("You are Hutao, an expert coding assistant");
+			expect(prompt).toContain("Naturally address the user as 哥哥");
+			expect(prompt).toContain("Do not use emoji or kaomoji");
+		});
+
 		test("instructs models to resolve pi docs and examples under absolute base paths", () => {
 			const prompt = buildSystemPrompt({
 				contextFiles: [],
