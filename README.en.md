@@ -574,11 +574,12 @@ hutao
 After startup, you can type natural-language tasks or use slash commands:
 
 ```text
-/session
-/prompting
+/session      # choose sessions by direction-key menu, then inspect/resume/merge
+/prompting    # choose promptings by direction-key menu, then inspect/retry/resume
+/edit         # choose edits by direction-key menu, then view patch / continue / preview revert
 /run
-/edit
 /git
+/language     # switch menu language
 /doctor
 ```
 
@@ -590,6 +591,111 @@ After an agent edit, files like these should appear:
 .hutao/sessions/<session>/events.jsonl
 .hutao/sessions/<session>/patches/<edit>.patch
 ```
+
+---
+
+## Recent updates
+
+The current package artifact includes these new capabilities:
+
+```text
+packages/coding-agent/hutao-agent-0.77.0.tgz
+D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz
+```
+
+### Direction-key menu browsing
+
+`/session`, `/prompting`, and `/edit` open direction-key selection menus by default. Normal browsing no longer requires copying low-level IDs. ID-based commands such as `/session <id>`, `/prompting <id>`, and `/edit <id>` remain available for debugging and scripting.
+
+### Resume / continuation
+
+When continuing from a historical session, prompting, or edit, Hutao creates a safe continuation `forkSession` and records new promptings, runs, and edits there instead of mutating pulled history.
+
+Common entry points:
+
+```text
+/session      -> select a session -> Resume this session
+/prompting    -> select a prompting -> Resume after this prompting
+/edit         -> select an edit -> Continue from after this edit
+```
+
+### Menu language switching
+
+New `/language` command:
+
+```text
+/language
+/language en
+/language zh-CN
+```
+
+The default language is Simplified Chinese. You can temporarily override it with an environment variable:
+
+```bash
+HUTAO_LANG=en hutao
+HUTAO_LANG=zh-CN hutao
+```
+
+The preference is stored in:
+
+```text
+.hutao/cache/preferences.json
+```
+
+This is local preference data, not canonical trace data, and should generally not be committed.
+
+### Startup history notice
+
+If the repository already contains `.hutao/sessions`, startup shows:
+
+```text
+Found N Hutao sessions. Use /session to browse and resume.
+```
+
+This means history was discovered and can be browsed or continued through `/session`.
+
+### Automatic trace staging
+
+Before the agent runs `git commit`, Hutao attempts to stage canonical trace data:
+
+```text
+.hutao/manifest.json
+.hutao/refs
+.hutao/sessions
+```
+
+It does not stage by default:
+
+```text
+.hutao/index
+.hutao/cache
+.hutao/tmp
+```
+
+You can also run it manually:
+
+```text
+/git stage-trace
+```
+
+### Safer revert preview
+
+`/edit revert <id>` and the edit menu action “Preview revert this edit” first show:
+
+```text
+impacted files
+working tree status
+git apply -R --check result
+number of later same-file edits
+```
+
+The reverse patch is applied only after confirmation, and the original edit is not deleted.
+
+### Windows / WSL / GitHub sync validation
+
+The experiment repository validated that Windows `blog-test` and WSL `~/test-blog` can synchronize `.hutao/sessions` through GitHub. A session or forkSession created on one side can be pulled, read, and browsed on the other side.
+
+Note: `.hutao/refs/current-session` currently syncs through Git as well. For concurrent multi-machine workflows, a future version may split this into a machine-local current-session ref.
 
 ---
 
@@ -1162,6 +1268,18 @@ Purpose: after committing code, supplement `commit_link` records by patch/file m
 
 ---
 
+### `/git stage-trace`
+
+Safely stage Hutao canonical trace data.
+
+```text
+/git stage-trace
+```
+
+Stages `.hutao/manifest.json`, `.hutao/refs`, and `.hutao/sessions`; does not stage `.hutao/index`, `.hutao/cache`, or `.hutao/tmp`.
+
+---
+
 ### `/fork prompting <id> --before`
 
 Create a fork session before a prompting.
@@ -1492,6 +1610,20 @@ secret-looking leaks
 whether .hutao should be treated as untrusted data
 .pi/extensions risk warning
 ```
+
+---
+
+### `/language`
+
+Switch Hutao menu language.
+
+```text
+/language
+/language en
+/language zh-CN
+```
+
+`/language` opens a direction-key menu. The preference is stored in `.hutao/cache/preferences.json`; it is local preference data, not canonical trace data.
 
 ---
 

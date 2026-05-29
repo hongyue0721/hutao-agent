@@ -577,11 +577,12 @@ hutao
 启动后可以直接输入自然语言任务，也可以使用 slash commands：
 
 ```text
-/session
-/prompting
+/session      # 方向键选择 session，并查看/继续/合并
+/prompting    # 方向键选择 prompting，并查看/重试/继续
+/edit         # 方向键选择 edit，并查看 patch / 继续 / 预览撤销
 /run
-/edit
 /git
+/language     # 切换菜单语言
 /doctor
 ```
 
@@ -593,6 +594,111 @@ hutao
 .hutao/sessions/<session>/events.jsonl
 .hutao/sessions/<session>/patches/<edit>.patch
 ```
+
+---
+
+## 最新能力更新
+
+当前安装包已经包含以下新增能力：
+
+```text
+packages/coding-agent/hutao-agent-0.77.0.tgz
+D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz
+```
+
+### 方向键菜单浏览
+
+`/session`、`/prompting`、`/edit` 默认会打开方向键菜单。普通浏览不再需要复制底层 ID；`/session <id>`、`/prompting <id>`、`/edit <id>` 等 ID 命令仍保留，方便调试和脚本使用。
+
+### Resume / continuation
+
+从历史 session、prompting 或 edit 继续时，Hutao 会创建安全的 continuation `forkSession`，并把后续新 prompting / run / edit 记录到新 session，避免改写已拉取的旧历史。
+
+常见入口：
+
+```text
+/session      -> 选择 session -> 继续此会话
+/prompting    -> 选择 prompting -> 从此提示后继续
+/edit         -> 选择 edit -> 从此修改后继续
+```
+
+### 菜单语言切换
+
+新增 `/language`：
+
+```text
+/language
+/language en
+/language zh-CN
+```
+
+默认语言是简体中文。也可以通过环境变量临时覆盖：
+
+```bash
+HUTAO_LANG=en hutao
+HUTAO_LANG=zh-CN hutao
+```
+
+语言偏好保存到：
+
+```text
+.hutao/cache/preferences.json
+```
+
+这是本地偏好，不是 canonical trace，不建议提交。
+
+### 启动历史提示
+
+如果仓库中已经有 `.hutao/sessions`，启动时会提示：
+
+```text
+Found N Hutao sessions. Use /session to browse and resume.
+```
+
+这表示历史已经被识别，可以用 `/session` 进入菜单浏览和继续。
+
+### 自动暂存 trace
+
+当 agent 执行 `git commit` 前，Hutao 会尝试自动暂存 canonical trace 数据：
+
+```text
+.hutao/manifest.json
+.hutao/refs
+.hutao/sessions
+```
+
+默认不暂存：
+
+```text
+.hutao/index
+.hutao/cache
+.hutao/tmp
+```
+
+也可以手动执行：
+
+```text
+/git stage-trace
+```
+
+### 更安全的 revert preview
+
+`/edit revert <id>` 和 edit 菜单里的“预览撤销此修改”会先展示：
+
+```text
+影响文件
+working tree 状态
+git apply -R --check 结果
+后续同文件 edits 数量
+```
+
+确认后才会应用反向 patch，且不会删除原 edit。
+
+### Windows / WSL / GitHub 同步验证
+
+已经用实验仓库验证：Windows `blog-test` 与 WSL `~/test-blog` 可以通过 GitHub 同步 `.hutao/sessions`。一侧创建的 session / forkSession，另一侧 pull 后可以读取和浏览。
+
+注意：`.hutao/refs/current-session` 当前也会跟随 Git 同步；多机器并行时，后续可考虑拆成本机 local-current。
 
 ---
 
@@ -1165,6 +1271,18 @@ Commit
 
 ---
 
+### `/git stage-trace`
+
+安全暂存 Hutao canonical trace 数据。
+
+```text
+/git stage-trace
+```
+
+会暂存 `.hutao/manifest.json`、`.hutao/refs`、`.hutao/sessions`，不会暂存 `.hutao/index`、`.hutao/cache`、`.hutao/tmp`。
+
+---
+
 ### `/fork prompting <id> --before`
 
 从某个 prompting 发生前创建 forkSession。
@@ -1495,6 +1613,20 @@ index 是否健康
 .hutao 是否应视为不可信数据
 .pi/extensions 风险提示
 ```
+
+---
+
+### `/language`
+
+切换 Hutao 菜单语言。
+
+```text
+/language
+/language en
+/language zh-CN
+```
+
+`/language` 会打开方向键菜单。语言偏好保存到 `.hutao/cache/preferences.json`，这是本地偏好，不是 canonical trace。
 
 ---
 
