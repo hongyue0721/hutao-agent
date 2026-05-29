@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
-import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoEvent } from "./event-store.ts";
+import { CommitLinker } from "./commit-linker.ts";
+import type { HutaoEvent } from "./event-store.ts";
+import { ForkSessionManager } from "./fork-session-manager.ts";
 import { GitAdapter } from "./git-adapter.ts";
-import { createHutaoId } from "./ids.ts";
-import { rebuildIndex } from "./index-builder.ts";
+import { MergeManager, type MergeMode } from "./merge-manager.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
@@ -29,10 +30,6 @@ function notify(
 
 function findEvent(events: HutaoEvent[], idPrefix: string, type?: string): HutaoEvent | undefined {
 	return events.find((event) => (!type || event.type === type) && String(event.id).startsWith(idPrefix));
-}
-
-function stringValue(value: unknown): string | undefined {
-	return typeof value === "string" ? value : undefined;
 }
 
 function getRepoRoot(ctx: ExtensionCommandContext): Promise<string | undefined> {
@@ -180,10 +177,15 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 	]);
 }
 
-export async function gitCommand(_args: string, ctx: ExtensionCommandContext): Promise<void> {
+export async function gitCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
 	await ctx.waitForIdle();
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao git", ["Not in a Git repository."], "warning");
+	if (args.trim() === "scan") {
+		const result = await new CommitLinker(repoRoot).scanRecentCommits();
+		notify(ctx, "Hutao git", [`linked commits: ${result.linked}`]);
+		return;
+	}
 	const git = new GitAdapter(repoRoot);
 	const events = readEvents(repoRoot);
 	const promptings = events.filter((event) => event.type === "prompting");
@@ -217,60 +219,18 @@ export async function forkCommand(args: string, ctx: ExtensionCommandContext): P
 			"warning",
 		);
 	const [sourceType, sourceId, modeFlag] = parts;
-	const events = readEvents(repoRoot);
-	const source = findEvent(
-		events,
-		sourceId,
-		sourceType === "prompting" ? "prompting" : sourceType === "edit" ? "edit" : undefined,
-	);
-	if (!source) return notify(ctx, "Hutao fork", [`Source not found: ${sourceId}`], "warning");
-	const git = new GitAdapter(repoRoot);
-	if ((await git.getStatusSummary()) !== "clean")
-		return notify(
-			ctx,
-			"Hutao fork",
-			["Working tree is dirty. Commit, stash, or clean before forking from history."],
-			"warning",
-		);
-	const forkId = createHutaoId("fs");
-	const now = new Date().toISOString();
-	const metadata = {
-		schema_version: HUTAO_SCHEMA_VERSION,
-		id: forkId,
-		kind: "forkSession" as const,
-		title: `Fork from ${source.id}`,
-		created_at: now,
-		updated_at: now,
-		base_git_head: stringValue(source.after_head) ?? stringValue(source.git_head) ?? (await git.getHead()),
-		base_tree: stringValue(source.after_tree) ?? stringValue(source.git_tree) ?? (await git.getTree()),
-		current_git_head_at_last_write: await git.getHead(),
-		current_tree_at_last_write: await git.getTree(),
-		status: "active" as const,
-		parent_session: String(source.session_id ?? ""),
-		fork_from: { type: sourceType, id: source.id, mode: modeFlag.replace(/^--/, "") },
-		summary: `Fork created from ${sourceType} ${source.id}`,
-	};
-	const store = new EventStore(repoRoot, forkId);
-	store.init(metadata);
-	store.append({
-		schema_version: HUTAO_SCHEMA_VERSION,
-		type: "fork_session",
-		id: forkId,
-		session_id: forkId,
-		parent_session: metadata.parent_session,
-		fork_from_type: sourceType,
-		fork_from_id: source.id,
-		fork_mode: modeFlag.replace(/^--/, ""),
-		base_git_head: metadata.base_git_head,
-		base_tree: metadata.base_tree,
-		created_by: "human",
-		reason: metadata.summary,
-		created_at: now,
-	});
-	rebuildIndex(repoRoot);
+	const mode = modeFlag.replace(/^--/, "") as "before" | "retry" | "after";
+	if (mode !== "before" && mode !== "retry" && mode !== "after") {
+		return notify(ctx, "Hutao fork", [`Unsupported fork mode: ${modeFlag}`], "warning");
+	}
+	if (sourceType !== "prompting" && sourceType !== "edit") {
+		return notify(ctx, "Hutao fork", [`Unsupported fork source: ${sourceType}`], "warning");
+	}
+	const result = await new ForkSessionManager(repoRoot).createFork(sourceType, sourceId, mode);
+	if (!result.ok) return notify(ctx, "Hutao fork", [result.reason ?? "Fork failed."], "warning");
 	notify(ctx, "Hutao fork", [
-		`Created forkSession ${forkId}`,
-		"Continue work in the new forkSession context from this history node.",
+		`Created forkSession ${result.sessionId}`,
+		"Working tree has been restored to the requested history state when possible.",
 	]);
 }
 
@@ -279,133 +239,32 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao merge", ["Not in a Git repository."], "warning");
 	const parts = args.trim().split(/\s+/).filter(Boolean);
-	if (parts[0] !== "session")
+	if (parts[0] !== "session") {
 		return notify(
 			ctx,
 			"Hutao merge",
 			["Usage: /merge session <session_id> [--history|--apply-edits|--apply-tree]"],
 			"warning",
 		);
+	}
 	const sourceIdPrefix = parts[1];
-	const mode = parts.includes("--history")
+	if (!sourceIdPrefix) return notify(ctx, "Hutao merge", ["Source session id is required."], "warning");
+	const mode: MergeMode = parts.includes("--history")
 		? "history_only"
 		: parts.includes("--apply-edits")
 			? "apply_edits"
 			: parts.includes("--apply-tree")
 				? "apply_tree"
 				: "preview";
-	const sessions = new SessionRegistry(repoRoot).readSessions();
-	const source = sourceIdPrefix ? sessions.find((session) => session.id.startsWith(sourceIdPrefix)) : undefined;
-	if (!source) return notify(ctx, "Hutao merge", [`Source session not found: ${sourceIdPrefix ?? ""}`], "warning");
-	const events = readEvents(repoRoot);
-	const sourceEvents = events.filter((event) => event.session_id === source.id);
-	const sourceEdits = sourceEvents.filter((event) => event.type === "edit");
-	const changedFiles = new Set<string>();
-	for (const edit of sourceEdits) for (const file of stringArray(edit.files)) changedFiles.add(file);
-	const git = new GitAdapter(repoRoot);
-	const status = await git.getStatusSummary();
-	if (mode === "preview" || mode === "apply_tree") {
-		notify(ctx, "Hutao merge preview", [
-			`source session: ${source.id}`,
-			`source kind: ${source.kind}`,
-			`parent session: ${source.parent_session ?? "none"}`,
-			`fork_from: ${source.fork_from ? JSON.stringify(source.fork_from) : "none"}`,
-			`base git head: ${source.base_git_head ?? "unknown"}`,
-			`prompting count: ${sourceEvents.filter((event) => event.type === "prompting").length}`,
-			`run count: ${sourceEvents.filter((event) => event.type === "run_finished").length}`,
-			`edit count: ${sourceEdits.length}`,
-			`changed files: ${[...changedFiles].join(", ") || "none"}`,
-			`current working tree dirty: ${status === "clean" ? "no" : "yes"}`,
-			mode === "apply_tree"
-				? "apply-tree is experimental: preview only in this version."
-				: "available modes: --history, --apply-edits, --apply-tree",
-		]);
-		return;
-	}
-	const targetSession = sessions[sessions.length - 1]?.id ?? source.id;
-	const store = new EventStore(repoRoot, targetSession);
-	if (mode === "history_only") {
-		store.append({
-			schema_version: HUTAO_SCHEMA_VERSION,
-			type: "merge",
-			id: createHutaoId("m"),
-			session_id: targetSession,
-			source_session: source.id,
-			target_session: targetSession,
-			mode,
-			status: "completed",
-			imported_promptings: sourceEvents.filter((event) => event.type === "prompting").map((event) => event.id),
-			imported_runs: sourceEvents.filter((event) => event.type === "run_finished").map((event) => event.id),
-			imported_edits: sourceEdits.map((event) => event.id),
-			applied_edits: [],
-			conflict_edits: [],
-			resolution_edits: [],
-			created_at: new Date().toISOString(),
-		});
-		rebuildIndex(repoRoot);
-		notify(ctx, "Hutao merge", ["History imported. No code changes were applied."]);
-		return;
-	}
-	if (status !== "clean")
-		return notify(
-			ctx,
-			"Hutao merge",
-			["Working tree is dirty. Commit, stash, or clean before applying edits."],
-			"warning",
-		);
-	const applied: string[] = [];
-	const conflicts: string[] = [];
-	const skipped: string[] = [];
-	const previouslyApplied = new Set<string>();
-	for (const merge of events.filter((event) => event.type === "merge")) {
-		for (const editId of stringArray(merge.applied_edits)) previouslyApplied.add(editId);
-	}
-	const targetBeforeTree = await git.getTree();
-	for (const edit of sourceEdits) {
-		if (previouslyApplied.has(String(edit.id))) {
-			skipped.push(String(edit.id));
-			continue;
-		}
-		const patchPath = join(repoRoot, ".hutao", "sessions", source.id, String(edit.patch));
-		const check = await git.applyPatchCheck(patchPath);
-		if (!check.ok) {
-			conflicts.push(String(edit.id));
-			break;
-		}
-		const apply = await git.applyPatch(patchPath);
-		if (!apply.ok) {
-			conflicts.push(String(edit.id));
-			break;
-		}
-		applied.push(String(edit.id));
-	}
-	store.append({
-		schema_version: HUTAO_SCHEMA_VERSION,
-		type: "merge",
-		id: createHutaoId("m"),
-		session_id: targetSession,
-		source_session: source.id,
-		target_session: targetSession,
-		mode,
-		status: conflicts.length ? "conflict" : "completed",
-		imported_edits: sourceEdits.map((event) => event.id),
-		applied_edits: applied,
-		conflict_edits: conflicts,
-		skipped_edits: skipped,
-		resolution_edits: [],
-		target_before_tree: targetBeforeTree,
-		target_after_tree: await git.getTree(),
-		created_at: new Date().toISOString(),
-	});
-	rebuildIndex(repoRoot);
-	notify(
-		ctx,
-		"Hutao merge",
-		[
-			`applied edits: ${applied.join(", ") || "none"}`,
-			`skipped edits: ${skipped.join(", ") || "none"}`,
-			`conflicts: ${conflicts.join(", ") || "none"}`,
-		],
-		conflicts.length ? "warning" : "info",
-	);
+	const result = await new MergeManager(repoRoot).mergeSession(sourceIdPrefix, mode);
+	const lines = [
+		result.message,
+		`mode: ${result.mode}`,
+		`changed files: ${result.changedFiles.join(", ") || "none"}`,
+		`applied edits: ${result.appliedEdits.join(", ") || "none"}`,
+		`skipped edits: ${result.skippedEdits.join(", ") || "none"}`,
+		`conflicts: ${result.conflictEdits.join(", ") || "none"}`,
+		`resolution edits: ${result.resolutionEdits.join(", ") || "none"}`,
+	];
+	notify(ctx, mode === "preview" ? "Hutao merge preview" : "Hutao merge", lines, result.ok ? "info" : "warning");
 }

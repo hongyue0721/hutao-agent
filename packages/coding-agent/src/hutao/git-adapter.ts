@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { HutaoIgnore } from "./hutao-ignore.ts";
 
@@ -114,6 +116,28 @@ export class GitAdapter {
 			if (match) files.add(match[2]);
 		}
 		return [...files].sort();
+	}
+
+	async applyPatchText(patch: string): Promise<GitCommandResult> {
+		const patchPath = join(this.cwd, ".hutao", "tmp", `apply-${process.pid}-${Date.now()}.patch`);
+		mkdirSync(join(this.cwd, ".hutao", "tmp"), { recursive: true });
+		writeFileSync(patchPath, patch, "utf-8");
+		return this.applyPatch(patchPath);
+	}
+
+	async getDiffBetweenRefs(fromRef: string, toRef: string): Promise<string> {
+		const result = await this.run(["diff", "--binary", fromRef, toRef], { maxBuffer: 100 * 1024 * 1024 });
+		return result.stdout;
+	}
+
+	async getCommitPatch(commit: string): Promise<string> {
+		const result = await this.run(["show", "--format=", "--binary", commit], { maxBuffer: 100 * 1024 * 1024 });
+		return result.stdout;
+	}
+
+	async refExists(ref: string): Promise<boolean> {
+		const result = await this.run(["rev-parse", "--verify", ref]);
+		return result.ok;
 	}
 
 	async getFileHashes(paths: string[]): Promise<FileHashEntry[]> {
