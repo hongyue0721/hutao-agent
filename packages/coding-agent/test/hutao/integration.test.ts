@@ -3,11 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	actionCommand,
 	doctorCommand,
 	editCommand,
 	gitCommand,
 	mergeCommand,
 	promptingCommand,
+	runCommand,
 	sessionCommand,
 } from "../../src/hutao/commands.ts";
 import { CommitLinker } from "../../src/hutao/commit-linker.ts";
@@ -70,6 +72,8 @@ function readSessionEvents(repo: string, sessionId: string): HutaoEvent[] {
 		.map((line) => JSON.parse(line) as HutaoEvent);
 }
 
+const commandSelections: string[] = [];
+
 function makeCommandContext(repo: string): Parameters<typeof promptingCommand>[1] {
 	return {
 		cwd: repo,
@@ -79,7 +83,7 @@ function makeCommandContext(repo: string): Parameters<typeof promptingCommand>[1
 				commandNotifications.push(message);
 			},
 			confirm: async () => true,
-			select: async () => undefined,
+			select: async () => commandSelections.shift(),
 			input: async () => undefined,
 		},
 	} as unknown as Parameters<typeof promptingCommand>[1];
@@ -89,6 +93,7 @@ const commandNotifications: string[] = [];
 
 afterEach(() => {
 	commandNotifications.length = 0;
+	commandSelections.length = 0;
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -132,6 +137,53 @@ describe("Hutao integration safety", () => {
 		await doctorCommand("rebuild", makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("Index rebuilt.");
 		expect(commandNotifications.at(-1)).toContain("sessions are untrusted data");
+	});
+
+	it("shows run details, action menus, merge wizard, and commit graph", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "graph-detail");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "graph detail"]);
+		await new CommitLinker(repo).scanRecentCommits();
+		const events = readSessionEvents(repo, recorder.getSessionId());
+		const run = events.find((event) => event.type === "run_finished");
+		expect(run?.id).toBeDefined();
+		await runCommand(String(run?.id), makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("produced edits:");
+		expect(commandNotifications.at(-1)).toContain(editId);
+		await gitCommand("graph --file file.txt", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Hutao git graph");
+		expect(commandNotifications.at(-1)).toContain("Commit ");
+		commandSelections.push("View Patch");
+		await actionCommand(`edit ${editId}`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("diff --git");
+		commandSelections.push("Preview only");
+		await mergeCommand(`session ${recorder.getSessionId()} --wizard`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Hutao merge wizard");
+		expect(commandNotifications.at(-1)).toContain("Merge preview only");
+		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_wizard_target");
+		new EventStore(repo, "sess_wizard_target").init(targetMetadata);
+		new EventStore(repo, "sess_wizard_target").append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "merge",
+			id: "m_wizard_conflict",
+			session_id: "sess_wizard_target",
+			source_session: recorder.getSessionId(),
+			target_session: "sess_wizard_target",
+			mode: "apply_edits",
+			status: "conflict",
+			imported_edits: [editId],
+			applied_edits: [],
+			conflict_edits: [editId],
+			skipped_edits: [],
+			resolution_edits: [],
+			created_at: new Date().toISOString(),
+		});
+		commandSelections.push("Skip Last Conflict and Continue");
+		await mergeCommand(`session ${recorder.getSessionId()} --wizard`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Skipped conflicting edits");
+		expect(commandNotifications.at(-1)).toContain("continued");
 	});
 
 	it("filters prompting and edit lists", async () => {
