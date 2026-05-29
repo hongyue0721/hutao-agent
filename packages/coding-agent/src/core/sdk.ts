@@ -137,7 +137,7 @@ function getAttributionHeaders(
 		sessionId &&
 		(model.provider === "opencode" || model.provider === "opencode-go" || model.baseUrl.includes("opencode.ai"))
 	) {
-		return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
+		return { "x-opencode-session": sessionId, "x-opencode-client": "hutao-agent" };
 	}
 
 	if (!isInstallTelemetryEnabled(settingsManager)) {
@@ -146,8 +146,8 @@ function getAttributionHeaders(
 
 	if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
 		return {
-			"HTTP-Referer": "https://pi.dev",
-			"X-OpenRouter-Title": "pi",
+			"HTTP-Referer": "https://github.com/hongyue0721/hutao-agent",
+			"X-OpenRouter-Title": "hutao-agent",
 			"X-OpenRouter-Categories": "cli-agent",
 		};
 	}
@@ -159,7 +159,7 @@ function getAttributionHeaders(
 		model.baseUrl.includes("gateway.ai.cloudflare.com")
 	) {
 		return {
-			"User-Agent": "pi-coding-agent",
+			"User-Agent": "hutao-agent",
 		};
 	}
 

@@ -1,7 +1,15 @@
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+	if (!value) return false;
+	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+function isVersionCheckEnabled(): boolean {
+	return isTruthyEnvFlag(process.env.HUTAO_ENABLE_VERSION_CHECK);
+}
 
 export interface LatestPiRelease {
 	version: string;
@@ -57,9 +65,11 @@ export async function getLatestPiRelease(
 	currentVersion: string,
 	options: { timeoutMs?: number } = {},
 ): Promise<LatestPiRelease | undefined> {
-	if (process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE) return undefined;
+	const latestVersionUrl = process.env.HUTAO_LATEST_VERSION_URL;
+	if (!isVersionCheckEnabled() || !latestVersionUrl || process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE)
+		return undefined;
 
-	const response = await fetch(LATEST_VERSION_URL, {
+	const response = await fetch(latestVersionUrl, {
 		headers: {
 			"User-Agent": getPiUserAgent(currentVersion),
 			accept: "application/json",

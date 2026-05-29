@@ -90,7 +90,9 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		} = {},
 	): Promise<Record<string, string> | undefined> {
 		const settingsManager = SettingsManager.create(cwd, agentDir);
-		if (options.telemetryEnabled === false) {
+		if (options.telemetryEnabled === true) {
+			settingsManager.setEnableInstallTelemetry(true);
+		} else if (options.telemetryEnabled === false) {
 			settingsManager.setEnableInstallTelemetry(false);
 		}
 
@@ -146,12 +148,22 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		}
 	}
 
-	it("adds default attribution headers for OpenRouter models", async () => {
+	it("adds default attribution headers for OpenRouter models when telemetry is enabled", async () => {
+		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"), {
+			telemetryEnabled: true,
+		});
+
+		expect(headers?.["HTTP-Referer"]).toBe("https://github.com/hongyue0721/hutao-agent");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("hutao-agent");
+		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
+	});
+
+	it("does not add attribution headers by default", async () => {
 		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"));
 
-		expect(headers?.["HTTP-Referer"]).toBe("https://pi.dev");
-		expect(headers?.["X-OpenRouter-Title"]).toBe("pi");
-		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
+		expect(headers?.["HTTP-Referer"]).toBeUndefined();
+		expect(headers?.["X-OpenRouter-Title"]).toBeUndefined();
+		expect(headers?.["X-OpenRouter-Categories"]).toBeUndefined();
 	});
 
 	it("does not add attribution headers when telemetry is disabled", async () => {
@@ -164,16 +176,19 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		expect(headers?.["X-OpenRouter-Categories"]).toBeUndefined();
 	});
 
-	it("adds attribution headers for custom providers routed through OpenRouter", async () => {
-		const headers = await captureHeaders(createModel("custom-openrouter", "https://openrouter.ai/api/v1"));
+	it("adds attribution headers for custom providers routed through OpenRouter when telemetry is enabled", async () => {
+		const headers = await captureHeaders(createModel("custom-openrouter", "https://openrouter.ai/api/v1"), {
+			telemetryEnabled: true,
+		});
 
-		expect(headers?.["HTTP-Referer"]).toBe("https://pi.dev");
-		expect(headers?.["X-OpenRouter-Title"]).toBe("pi");
+		expect(headers?.["HTTP-Referer"]).toBe("https://github.com/hongyue0721/hutao-agent");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("hutao-agent");
 		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
 	});
 
 	it("lets provider and request headers override the defaults", async () => {
 		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"), {
+			telemetryEnabled: true,
 			providerHeaders: {
 				"HTTP-Referer": "https://provider.example",
 				"X-OpenRouter-Categories": "provider-category",
@@ -194,7 +209,7 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		});
 
 		expect(headers?.["x-opencode-session"]).toBe("opencode-session");
-		expect(headers?.["x-opencode-client"]).toBe("pi");
+		expect(headers?.["x-opencode-client"]).toBe("hutao-agent");
 	});
 
 	it("lets configured OpenCode headers override the defaults", async () => {

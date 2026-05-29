@@ -9,6 +9,8 @@ import {
 
 const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 const originalOffline = process.env.PI_OFFLINE;
+const originalEnableVersionCheck = process.env.HUTAO_ENABLE_VERSION_CHECK;
+const originalLatestVersionUrl = process.env.HUTAO_LATEST_VERSION_URL;
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -22,7 +24,22 @@ afterEach(() => {
 	} else {
 		process.env.PI_OFFLINE = originalOffline;
 	}
+	if (originalEnableVersionCheck === undefined) {
+		delete process.env.HUTAO_ENABLE_VERSION_CHECK;
+	} else {
+		process.env.HUTAO_ENABLE_VERSION_CHECK = originalEnableVersionCheck;
+	}
+	if (originalLatestVersionUrl === undefined) {
+		delete process.env.HUTAO_LATEST_VERSION_URL;
+	} else {
+		process.env.HUTAO_LATEST_VERSION_URL = originalLatestVersionUrl;
+	}
 });
+
+function enableVersionCheck(): void {
+	process.env.HUTAO_ENABLE_VERSION_CHECK = "1";
+	process.env.HUTAO_LATEST_VERSION_URL = "https://updates.example/latest-version";
+}
 
 describe("version checks", () => {
 	it("compares package versions", () => {
@@ -33,7 +50,16 @@ describe("version checks", () => {
 		expect(isNewerPackageVersion("0.70.6", "0.70.5")).toBe(true);
 	});
 
-	it("returns only newer versions", async () => {
+	it("does not check versions unless explicitly enabled", async () => {
+		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.4" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getLatestPiVersion("1.2.3")).resolves.toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("returns only newer versions when checks are enabled", async () => {
+		enableVersionCheck();
 		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.3" }));
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -41,16 +67,17 @@ describe("version checks", () => {
 		await expect(checkForNewPiVersion("1.2.2")).resolves.toEqual({ version: "1.2.3" });
 	});
 
-	it("uses the pi.dev version check api with a pi user agent", async () => {
+	it("uses the configured version check api with a user agent when enabled", async () => {
+		enableVersionCheck();
 		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.4" }));
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledWith(
-			"https://pi.dev/api/latest-version",
+			"https://updates.example/latest-version",
 			expect.objectContaining({
 				headers: expect.objectContaining({
-					"User-Agent": expect.stringMatching(/^pi\/1\.2\.3 /),
+					"User-Agent": expect.stringMatching(/^hutao-agent\/1\.2\.3 /),
 					accept: "application/json",
 				}),
 			}),
@@ -58,21 +85,23 @@ describe("version checks", () => {
 	});
 
 	it("returns the active package metadata from the version check api", async () => {
+		enableVersionCheck();
 		const fetchMock = vi.fn(async () =>
 			Response.json({
-				packageName: "@new-scope/pi",
+				packageName: "hutao-agent",
 				version: "1.2.4",
 			}),
 		);
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
-			packageName: "@new-scope/pi",
+			packageName: "hutao-agent",
 			version: "1.2.4",
 		});
 	});
 
 	it("returns update notes from the version check api", async () => {
+		enableVersionCheck();
 		const fetchMock = vi.fn(async () => Response.json({ note: " **Read this** ", version: "1.2.4" }));
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -80,6 +109,7 @@ describe("version checks", () => {
 	});
 
 	it("skips api calls when version checks are disabled", async () => {
+		enableVersionCheck();
 		process.env.PI_SKIP_VERSION_CHECK = "1";
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
