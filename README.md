@@ -1,18 +1,26 @@
 # hutao-agent / 胡桃 Agent
 
-中文 | [English notes included in each section]
+中文 | [English](README.en.md)
+
+## 致谢与用途声明
+
+本项目框架来源于 pi-agent（earendil-works/pi）。感谢原项目提供 coding agent harness、TUI、extension system、tool runtime、LLM provider abstraction 等基础能力。
+
+`hutao-agent` 当前是一个验证性 demo，用于验证用户“胡桃酱”（https://github.com/zyf2007）提出的天才思路：让 AI coding agent 的 prompting、run、edit、fork、merge、revert 像 Git 历史一样可追溯、可分叉、可合并、可恢复。
+
+本框架仅作为思路验证用途，不代表对原 pi-agent 的正式替代，也不代表原项目立场。
+
+---
 
 `hutao-agent` 是一个和 Git 仓库绑定的 AI coding agent。它不仅能帮你读文件、跑命令、改代码，还会把“人类输入了什么、agent 做了什么、文件实际改了什么、这些改动和 Git commit 有什么关系”记录到仓库内的 `.hutao/` 目录中。
 
-`hutao-agent` is a Git-native AI coding agent. It not only edits code, but also records human prompts, agent runs, file edits, patches, forks, merges, and Git commit links inside the repository-local `.hutao/` directory.
-
-启动命令 / CLI command:
+启动命令：
 
 ```bash
 hutao
 ```
 
-典型使用方式 / Typical workflow:
+典型使用方式：
 
 ```bash
 git clone <repo>
@@ -20,32 +28,28 @@ cd <repo>
 hutao
 ```
 
-如果这个仓库已经包含 `.hutao/` 历史，Hutao 启动后就能读取历史 sessions、promptings、runs、edits、forkSessions、mergeEvents，以及它们和 Git commit / branch / merge 的关系。
-
-If the repository already contains `.hutao/` history, Hutao can load previous sessions, promptings, runs, edits, fork sessions, merge events, and their relationships to Git commits and branches.
+如果仓库已经包含 `.hutao/` 历史，Hutao 启动后可以读取历史 sessions、promptings、runs、edits、forkSessions、mergeEvents，以及它们和 Git commit / branch / merge 的关系。
 
 ---
 
-## 目录 / Table of contents
+## 目录
 
-- [项目定位 / What is hutao-agent?](#项目定位--what-is-hutao-agent)
-- [核心特点 / Key features](#核心特点--key-features)
-- [安装 / Installation](#安装--installation)
-- [快速开始 / Quick start](#快速开始--quick-start)
-- [核心概念 / Core concepts](#核心概念--core-concepts)
-- [数据目录 / Storage layout](#数据目录--storage-layout)
-- [指令详解 / Slash command reference](#指令详解--slash-command-reference)
-- [合并策略 / Merge strategies](#合并策略--merge-strategies)
-- [安全与隐私 / Safety and privacy](#安全与隐私--safety-and-privacy)
-- [常见工作流 / Common workflows](#常见工作流--common-workflows)
-- [故障排查 / Troubleshooting](#故障排查--troubleshooting)
-- [当前状态 / Current status](#当前状态--current-status)
+- [项目定位](#项目定位)
+- [核心特点](#核心特点)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [核心概念](#核心概念)
+- [数据目录](#数据目录)
+- [指令详解](#指令详解)
+- [合并策略](#合并策略)
+- [安全与隐私](#安全与隐私)
+- [常见工作流](#常见工作流)
+- [故障排查](#故障排查)
+- [当前状态](#当前状态)
 
 ---
 
-## 项目定位 / What is hutao-agent?
-
-### 中文
+## 项目定位
 
 `hutao-agent` 的目标不是简单保存聊天记录，而是构建一个：
 
@@ -85,32 +89,13 @@ agent 当时读了哪些文件、跑了哪些命令、做了哪些工具调用�
 clone 到另一个目录后，还能不能理解这些历史？
 ```
 
-### English
-
-`hutao-agent` is not just a chat log saver. It is a repository-local, Git-native trace system for AI-assisted software development.
-
-It records:
-
-```text
-What the human asked
-What the agent did
-What files actually changed
-What patch was produced
-Which Git commit contains or relates to the change
-Which session was forked, merged, skipped, or reverted
-```
-
-The goal is to make AI coding history inspectable, explainable, forkable, mergeable, and revertable.
-
 ---
 
-## 核心特点 / Key features
+## 核心特点
 
 ### 1. 稳定命令：`hutao`
 
-中文：最终用户命令是 `hutao`，不是 `pi`。
-
-English: The stable user-facing command is `hutao`, not `pi`.
+最终用户命令是：
 
 ```bash
 hutao
@@ -118,82 +103,64 @@ hutao
 
 ### 2. 仓库本地 trace：`.hutao/`
 
-中文：Hutao 的 trace 数据放在当前 Git 仓库内的 `.hutao/`。这些数据可以随仓库 clone、fork、merge。
-
-English: Hutao trace data is stored under `.hutao/` inside the repository, so it can move with the Git repository.
+Hutao 的 trace 数据放在当前 Git 仓库内的 `.hutao/`。这些数据可以随仓库 clone、fork、merge。
 
 ### 3. Prompting / Run / Edit 三元模型
 
-中文：Hutao 严格区分人说了什么、agent 做了什么、文件实际变了什么。
-
-English: Hutao separates human intent, agent activity, and actual file changes.
+Hutao 严格区分人说了什么、agent 做了什么、文件实际变了什么。
 
 ```text
-Prompting = 人类输入 / what the human asked
-Run       = agent 执行动作 / what the agent did
-Edit      = 文件实际改动 / what changed in files
+Prompting = 人类输入
+Run       = agent 执行动作
+Edit      = 文件实际改动
 ```
 
 ### 4. Patch-based edit tracking
 
-中文：每个 edit 会保存 patch、patch hash、before/after Git 状态、关联 prompting 和 run。
-
-English: Each edit stores patch metadata, patch hash, before/after Git state, and links to its parent prompting and run.
+每个 edit 会保存 patch、patch hash、before/after Git 状态、关联 prompting 和 run。
 
 ### 5. Git-native commit links
 
-中文：Hutao 不替代 Git，而是把 prompting / run / edit 和 Git commit 建立引用关系。
-
-English: Hutao does not replace Git. It links promptings, runs, and edits to Git commits.
+Hutao 不替代 Git，而是把 prompting / run / edit 和 Git commit 建立引用关系。
 
 ### 6. Fork session
 
-中文：从旧 prompting、edit 或 commit 继续工作时，Hutao 创建新的 `forkSession`，不会篡改旧历史。
-
-English: Continuing from a historical prompting, edit, or commit creates a new `forkSession` instead of mutating old history.
+从旧 prompting、edit 或 commit 继续工作时，Hutao 创建新的 `forkSession`，不会篡改旧历史。
 
 ### 7. Merge session
 
-中文：Hutao 支持 preview、history-only、apply-edits、apply-tree 等合并方式。默认 merge 只 preview，不改代码。
-
-English: Hutao supports merge preview, history-only import, patch replay, and final snapshot apply. The default merge command is preview-only.
+Hutao 支持 preview、history-only、apply-edits、apply-tree 等合并方式。默认 merge 只 preview，不改代码。
 
 ### 8. Revert without deleting history
 
-中文：revert edit 不会删除原 edit，而是追加新的事件和必要的新 edit。
-
-English: Reverting an edit appends new events and possibly a new edit. The original edit remains as history.
+revert edit 不会删除原 edit，而是追加新的事件和必要的新 edit。
 
 ### 9. 安全隐私默认保守
 
-中文：默认不保存完整 provider payload、不保存完整 terminal output、不记录 `.env` 等敏感文件，路径使用 repo-relative POSIX path。
+默认不保存完整 provider payload、不保存完整 terminal output、不记录 `.env` 等敏感文件，路径使用 repo-relative POSIX path。
 
-English: Hutao avoids full provider payloads, full terminal output, secret files, and absolute canonical paths by default.
+### 10. 默认语气
 
-### 10. 默认语气 / Default persona
-
-中文：Hutao 默认是专业 coding agent，但语气更温柔可爱，会自然叫“哥哥”，不使用 emoji 和颜文字，也不会让语气影响正确性。
-
-English: Hutao remains a professional coding agent, with a warmer younger-sister style by default. It avoids emoji and kaomoji and never lets tone override correctness or safety.
+Hutao 默认是专业 coding agent，但语气更温柔可爱，会自然叫“哥哥”，不使用 emoji 和颜文字，也不会让语气影响正确性、安全性和技术质量。
 
 ---
 
-## 安装 / Installation
+## 安装
 
-### 安装前准备 / Prerequisites
+### 安装前准备
 
 Hutao 是 Node.js/npm 发布形态的命令行工具，安装前需要：
-
-Hutao is distributed as a Node.js/npm CLI package. Before installation, make sure you have:
 
 ```text
 Node.js 20+
 npm
 Git
-一个可用终端 / a usable terminal
+一个可用终端
 ```
 
-检查版本 / Check versions:
+建议使用 Node.js 22 LTS 或更新版本。
+
+检查版本：
 
 ```bash
 node --version
@@ -201,17 +168,13 @@ npm --version
 git --version
 ```
 
-建议使用 Node.js 22 LTS 或更新版本。
-
-Node.js 22 LTS or newer is recommended.
-
-仓库内安装包 / Package artifact in this repository:
+仓库内安装包：
 
 ```text
 packages/coding-agent/hutao-agent-0.77.0.tgz
 ```
 
-本地复制包 / Local copied package:
+本机复制包：
 
 ```text
 D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz
@@ -219,22 +182,18 @@ D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz
 
 ---
 
-### Windows 安装 / Windows installation
+### Windows 安装
 
-#### 1. 安装 Node.js 和 Git / Install Node.js and Git
+#### 1. 安装 Node.js 和 Git
 
-推荐方式一：从官网下载。
-
-Recommended option 1: install from official websites.
+方式一：从官网下载。
 
 ```text
 Node.js: https://nodejs.org/
 Git for Windows: https://git-scm.com/download/win
 ```
 
-推荐方式二：使用 winget。
-
-Recommended option 2: use winget.
+方式二：使用 winget。
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
@@ -243,19 +202,15 @@ winget install Git.Git
 
 安装后重新打开 PowerShell，检查：
 
-After installation, reopen PowerShell and check:
-
 ```powershell
 node --version
 npm --version
 git --version
 ```
 
-#### 2. 从仓库 tgz 安装 Hutao / Install Hutao from repository tgz
+#### 2. 从仓库 tgz 安装 Hutao
 
 如果你在本仓库根目录：
-
-If you are in the repository root:
 
 ```powershell
 cd D:\OneDrive\Desktop\hutao-agent.__tmp_inspect
@@ -264,20 +219,18 @@ npm install -g --ignore-scripts .\packages\coding-agent\hutao-agent-0.77.0.tgz
 
 如果你使用桌面复制包：
 
-If you use the copied desktop package:
-
 ```powershell
 npm install -g --ignore-scripts "D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz"
 ```
 
-#### 3. 验证安装 / Verify installation
+#### 3. 验证安装
 
 ```powershell
 where hutao
 hutao --version
 ```
 
-期望输出 / Expected:
+期望输出：
 
 ```text
 0.77.0
@@ -285,22 +238,16 @@ hutao --version
 
 Windows npm 通常会生成这些入口：
 
-Windows npm usually creates these command shims:
-
 ```text
 C:\Users\<you>\AppData\Roaming\npm\hutao.cmd
 C:\Users\<you>\AppData\Roaming\npm\hutao.ps1
 ```
 
-#### 4. PATH 排查 / PATH troubleshooting
+#### 4. PATH 排查
 
 如果提示 `hutao` 不是可识别命令，先关闭并重新打开 PowerShell。
 
-If `hutao` is not recognized, close and reopen PowerShell first.
-
-然后检查 npm 全局 bin 路径：
-
-Then check npm global bin path:
+然后检查 npm 全局路径：
 
 ```powershell
 npm config get prefix
@@ -310,15 +257,11 @@ where hutao
 
 确认下面目录在 Windows PATH 中：
 
-Ensure this directory is in Windows PATH:
-
 ```text
 C:\Users\<you>\AppData\Roaming\npm
 ```
 
 如果 PowerShell 因执行策略拒绝运行 `hutao.ps1`，可以使用：
-
-If PowerShell blocks `hutao.ps1` due to execution policy, use:
 
 ```powershell
 hutao.cmd --version
@@ -326,13 +269,11 @@ hutao.cmd --version
 
 或调整当前用户执行策略：
 
-Or adjust current-user execution policy:
-
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-#### 5. 启动 / Start
+#### 5. 启动
 
 ```powershell
 mkdir D:\hutao-demo
@@ -343,13 +284,11 @@ hutao
 
 ---
 
-### macOS 安装 / macOS installation
+### macOS 安装
 
-#### 1. 安装 Homebrew、Node.js、Git / Install Homebrew, Node.js, and Git
+#### 1. 安装 Homebrew、Node.js、Git
 
 如果还没有 Homebrew：
-
-If Homebrew is not installed:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -357,13 +296,11 @@ If Homebrew is not installed:
 
 安装 Node.js 和 Git：
 
-Install Node.js and Git:
-
 ```bash
 brew install node git
 ```
 
-检查版本 / Check versions:
+检查版本：
 
 ```bash
 node --version
@@ -371,45 +308,41 @@ npm --version
 git --version
 ```
 
-#### 2. 获取仓库 / Get the repository
+#### 2. 获取仓库
 
 ```bash
 git clone https://github.com/hongyue0721/hutao-agent.git
 cd hutao-agent
 ```
 
-#### 3. 从仓库 tgz 安装 / Install from repository tgz
+#### 3. 从仓库 tgz 安装
 
 ```bash
 npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
 ```
 
-#### 4. 验证 / Verify
+#### 4. 验证
 
 ```bash
 which hutao
 hutao --version
 ```
 
-期望输出 / Expected:
+期望输出：
 
 ```text
 0.77.0
 ```
 
-#### 5. npm global PATH 排查 / npm global PATH troubleshooting
+#### 5. npm global PATH 排查
 
 查看 npm 全局 prefix：
-
-Check npm global prefix:
 
 ```bash
 npm config get prefix
 ```
 
 常见全局 bin 目录：
-
-Common global bin directories:
 
 ```text
 /usr/local/bin
@@ -419,16 +352,14 @@ Common global bin directories:
 
 如果 `hutao` 找不到，把 npm global bin 加入 shell 配置。
 
-If `hutao` is not found, add npm global bin to your shell profile.
-
-zsh 示例 / zsh example:
+zsh 示例：
 
 ```bash
 echo 'export PATH="$(npm config get prefix)/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-#### 6. 启动 / Start
+#### 6. 启动
 
 ```bash
 mkdir hutao-demo
@@ -441,9 +372,7 @@ hutao
 
 ### Linux Debian / Ubuntu 系安装
 
-### Linux Debian/Ubuntu-family installation
-
-适用于 / Applies to:
+适用于：
 
 ```text
 Debian
@@ -454,25 +383,23 @@ Zorin OS
 Kali 等 Debian/Ubuntu 系发行版
 ```
 
-#### 1. 安装 Git 和基础工具 / Install Git and basic tools
+#### 1. 安装 Git 和基础工具
 
 ```bash
 sudo apt update
 sudo apt install -y git curl ca-certificates build-essential
 ```
 
-#### 2. 安装 Node.js / Install Node.js
+#### 2. 安装 Node.js
 
 推荐使用 NodeSource 安装 Node.js 22：
-
-Recommended: install Node.js 22 from NodeSource:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
-检查版本 / Check versions:
+检查版本：
 
 ```bash
 node --version
@@ -480,22 +407,20 @@ npm --version
 git --version
 ```
 
-#### 3. 获取仓库 / Get the repository
+#### 3. 获取仓库
 
 ```bash
 git clone https://github.com/hongyue0721/hutao-agent.git
 cd hutao-agent
 ```
 
-#### 4. 安装 Hutao / Install Hutao
+#### 4. 安装 Hutao
 
 ```bash
 npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
 ```
 
 如果全局安装遇到权限问题，可以配置用户级 npm prefix：
-
-If global install has permission issues, configure a user-level npm prefix:
 
 ```bash
 mkdir -p ~/.npm-global
@@ -507,21 +432,19 @@ npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
 
 如果使用 zsh：
 
-If using zsh:
-
 ```bash
 echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-#### 5. 验证 / Verify
+#### 5. 验证
 
 ```bash
 which hutao
 hutao --version
 ```
 
-#### 6. 启动 / Start
+#### 6. 启动
 
 ```bash
 mkdir hutao-demo
@@ -534,9 +457,7 @@ hutao
 
 ### Linux Arch / Manjaro 系安装
 
-### Linux Arch/Manjaro-family installation
-
-适用于 / Applies to:
+适用于：
 
 ```text
 Arch Linux
@@ -545,14 +466,14 @@ EndeavourOS
 Garuda Linux 等 Arch 系发行版
 ```
 
-#### 1. 安装 Node.js、npm、Git / Install Node.js, npm, and Git
+#### 1. 安装 Node.js、npm、Git
 
 ```bash
 sudo pacman -Syu
 sudo pacman -S --needed nodejs npm git base-devel
 ```
 
-检查版本 / Check versions:
+检查版本：
 
 ```bash
 node --version
@@ -562,24 +483,20 @@ git --version
 
 如果仓库源里的 Node.js 版本过旧，可以使用 nvm 或其他 Node 版本管理器安装 Node.js 22+。
 
-If the repository Node.js version is too old, use nvm or another Node version manager to install Node.js 22+.
-
-#### 2. 获取仓库 / Get the repository
+#### 2. 获取仓库
 
 ```bash
 git clone https://github.com/hongyue0721/hutao-agent.git
 cd hutao-agent
 ```
 
-#### 3. 安装 Hutao / Install Hutao
+#### 3. 安装 Hutao
 
 ```bash
 npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
 ```
 
 如果全局安装遇到权限问题，使用用户级 npm prefix：
-
-If global install has permission issues, use a user-level npm prefix:
 
 ```bash
 mkdir -p ~/.npm-global
@@ -589,21 +506,21 @@ source ~/.bashrc
 npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
 ```
 
-zsh 用户 / zsh users:
+zsh 用户：
 
 ```bash
 echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-#### 4. 验证 / Verify
+#### 4. 验证
 
 ```bash
 which hutao
 hutao --version
 ```
 
-#### 5. 启动 / Start
+#### 5. 启动
 
 ```bash
 mkdir hutao-demo
@@ -614,11 +531,9 @@ hutao
 
 ---
 
-### 从源码构建安装 / Build and install from source
+### 从源码构建安装
 
 如果你想基于源码重新打包：
-
-If you want to rebuild the package from source:
 
 ```bash
 git clone https://github.com/hongyue0721/hutao-agent.git
@@ -633,13 +548,13 @@ hutao --version
 
 ---
 
-### 卸载 / Uninstall
+### 卸载
 
 ```bash
 npm uninstall -g hutao-agent
 ```
 
-验证命令是否移除 / Verify command removal:
+验证命令是否移除：
 
 ```bash
 where hutao   # Windows
@@ -648,11 +563,9 @@ which hutao   # macOS/Linux
 
 ---
 
-## 快速开始 / Quick start
+## 快速开始
 
 创建一个 Git 仓库并启动 Hutao：
-
-Create a Git repository and start Hutao:
 
 ```bash
 mkdir demo
@@ -662,8 +575,6 @@ hutao
 ```
 
 启动后可以直接输入自然语言任务，也可以使用 slash commands：
-
-After startup, you can type natural-language tasks or use slash commands:
 
 ```text
 /session
@@ -676,8 +587,6 @@ After startup, you can type natural-language tasks or use slash commands:
 
 完成一次 agent 编辑后，通常会出现：
 
-After an agent edit, you should see files like:
-
 ```text
 .hutao/manifest.json
 .hutao/sessions/<session>/session.json
@@ -687,40 +596,30 @@ After an agent edit, you should see files like:
 
 ---
 
-## 核心概念 / Core concepts
+## 核心概念
 
 ### Session
 
-中文：`Session` 是一次 agent 工作线，包含 promptings、runs、edits、fork metadata、merge metadata、commit links 等。
-
-English: A `Session` is one line of agent work containing promptings, runs, edits, fork metadata, merge metadata, and commit links.
+`Session` 是一次 agent 工作线，包含 promptings、runs、edits、fork metadata、merge metadata、commit links 等。
 
 Session 不等于 Git branch，但可以和 Git branch / commit 关联。
 
-A session is not the same as a Git branch, but it can be linked to branches and commits.
-
 ### Prompting
 
-中文：`prompting` 是一次人类输入事件，回答“人当时想让 agent 做什么”。
-
-English: A `prompting` is a human input event. It answers: what did the human ask the agent to do?
+`prompting` 是一次人类输入事件，回答“人当时想让 agent 做什么”。
 
 它可以是：
 
-It can be:
-
 ```text
-一次任务指令 / a task request
-一次问题 / a question
-一次纠正 / a correction
-一次继续请求 / a continue request
-一次 merge 请求 / a merge request
-一次 fork 请求 / a fork request
+一次任务指令
+一次问题
+一次纠正
+一次继续请求
+一次 merge 请求
+一次 fork 请求
 ```
 
 记录字段包括：
-
-Recorded fields include:
 
 ```text
 id
@@ -738,11 +637,9 @@ related runs / edits / commits
 
 ### Run
 
-中文：`run` 是 agent 的一次动作或工具调用，回答“agent 当时做了什么”。
+`run` 是 agent 的一次动作或工具调用，回答“agent 当时做了什么”。
 
-English: A `run` is one agent action or tool call. It answers: what did the agent do?
-
-例子 / Examples:
+例子：
 
 ```text
 read file
@@ -756,17 +653,11 @@ scan git diff
 
 Run 不一定改文件。只有 run 前后工作区发生变化时才会产生 edit。
 
-A run does not necessarily change files. An edit is created only when the worktree actually changes.
-
 ### Edit
 
-中文：`edit` 是文件或工作区实际变化事件，回答“代码实际发生了什么变化”。
-
-English: An `edit` is an actual file/worktree change. It answers: what changed in the code?
+`edit` 是文件或工作区实际变化事件，回答“代码实际发生了什么变化”。
 
 记录字段包括：
-
-Recorded fields include:
 
 ```text
 parent_prompting
@@ -784,41 +675,31 @@ summary
 
 ### Commit link
 
-中文：`commit_link` 把 Git commit 和 prompting / run / edit 关联起来。一个 commit 可以包含多个 promptings 或 edits，一个 edit 也可能尚未进入 commit。
-
-English: A `commit_link` connects Git commits to promptings, runs, and edits. One commit may contain multiple promptings/edits, and an edit may remain uncommitted.
+`commit_link` 把 Git commit 和 prompting / run / edit 关联起来。一个 commit 可以包含多个 promptings 或 edits，一个 edit 也可能尚未进入 commit。
 
 ### forkSession
 
-中文：`forkSession` 是从历史节点继续工作的 session。它不会覆盖旧 session，而是创建新的工作线。
-
-English: A `forkSession` continues work from a historical point without modifying the original session.
+`forkSession` 是从历史节点继续工作的 session。它不会覆盖旧 session，而是创建新的工作线。
 
 ### Merge event
 
-中文：`merge` event 记录 session 合并行为，包括 history-only、apply-edits、apply-tree、conflict、skip、resolve、abort。
-
-English: A `merge` event records session merge operations such as history-only import, apply-edits, apply-tree, conflict, skip, resolve, and abort.
+`merge` event 记录 session 合并行为，包括 history-only、apply-edits、apply-tree、conflict、skip、resolve、abort。
 
 ### Revert event
 
-中文：revert 是追加历史，不是删除历史。原 edit 保留，新事件记录撤销行为。
-
-English: Revert appends history instead of deleting history. The original edit remains recorded.
+revert 是追加历史，不是删除历史。原 edit 保留，新事件记录撤销行为。
 
 ---
 
-## 数据目录 / Storage layout
+## 数据目录
 
 Hutao trace 数据存放在：
-
-Hutao trace data is stored in:
 
 ```text
 .hutao/
 ```
 
-推荐结构 / Typical layout:
+推荐结构：
 
 ```text
 .hutao/
@@ -844,7 +725,7 @@ Hutao trace data is stored in:
 └── tmp/
 ```
 
-事实来源 / Source of truth:
+事实来源：
 
 ```text
 .hutao/sessions/*/session.json
@@ -854,15 +735,11 @@ Hutao trace data is stored in:
 
 `index/` 和 `cache/` 可以重建。
 
-`index/` and `cache/` can be rebuilt.
-
 ---
 
-## 指令详解 / Slash command reference
+## 指令详解
 
 下面所有命令都在 Hutao 交互式 TUI 内使用。
-
-All commands below are used inside the Hutao interactive TUI.
 
 ---
 
@@ -870,13 +747,11 @@ All commands below are used inside the Hutao interactive TUI.
 
 列出当前仓库中的 sessions 和 forkSessions。
 
-List sessions and fork sessions in the current repository.
-
 ```text
 /session
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 id
@@ -894,12 +769,7 @@ last git head
 updated_at
 ```
 
-使用场景 / Use when:
-
-```text
-想看这个仓库有哪些 AI 工作线
-want to see all AI work lines in the repository
-```
+使用场景：想看这个仓库有哪些 AI 工作线。
 
 ---
 
@@ -907,14 +777,12 @@ want to see all AI work lines in the repository
 
 查看某个 session 或 forkSession 的详情。
 
-Show details for one session or fork session.
-
 ```text
 /session sess_01...
 /session fs_01...
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 session metadata
@@ -927,20 +795,11 @@ merges
 commit links
 ```
 
-使用场景 / Use when:
-
-```text
-想理解某次 agent 工作完整做了什么
-want to understand a complete agent work line
-```
-
 ---
 
 ### `/prompting`
 
 列出所有 prompting。
-
-List all promptings.
 
 ```text
 /prompting
@@ -948,24 +807,20 @@ List all promptings.
 
 Prompting 是人类输入事件。
 
-A prompting is a human input event.
-
 ---
 
 ### `/prompting <id>`
 
 查看某个 prompting 详情。
 
-Show one prompting in detail.
-
 ```text
 /prompting p_01...
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
-原始用户输入 / original user input
+原始用户输入
 session id
 created git head
 cwd
@@ -984,8 +839,6 @@ merge usage
 
 按 session 过滤 promptings。
 
-Filter promptings by session.
-
 ```text
 /prompting --session sess_01...
 ```
@@ -996,18 +849,11 @@ Filter promptings by session.
 
 按 commit 过滤 promptings。
 
-Filter promptings by commit.
-
 ```text
 /prompting --commit abc123
 ```
 
-用途 / Purpose:
-
-```text
-从 Git commit 反查当时人类让 agent 做了什么
-find the human request related to a commit
-```
+用途：从 Git commit 反查当时人类让 agent 做了什么。
 
 ---
 
@@ -1015,26 +861,17 @@ find the human request related to a commit
 
 按文件过滤 promptings。
 
-Filter promptings by file.
-
 ```text
 /prompting --file src/auth.ts
 ```
 
-用途 / Purpose:
-
-```text
-查看哪些人类输入影响过某个文件
-find which human requests affected a file
-```
+用途：查看哪些人类输入影响过某个文件。
 
 ---
 
 ### `/prompting search <query>`
 
 搜索 prompting 文本。
-
-Search prompting text.
 
 ```text
 /prompting search token expiration
@@ -1046,15 +883,11 @@ Search prompting text.
 
 列出 agent runs。
 
-List agent runs.
-
 ```text
 /run
 ```
 
 Run 是 agent 的一次工具调用或执行动作。
-
-A run is one tool call or execution step by the agent.
 
 ---
 
@@ -1062,13 +895,11 @@ A run is one tool call or execution step by the agent.
 
 查看某个 run 详情。
 
-Show one run in detail.
-
 ```text
 /run r_01...
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 run id
@@ -1092,12 +923,7 @@ output tail
 output_truncated
 ```
 
-用途 / Purpose:
-
-```text
-定位 agent 当时具体做了什么、输出了什么、有没有产生 edit
-inspect what the agent did and whether it produced edits
-```
+用途：定位 agent 当时具体做了什么、输出了什么、有没有产生 edit。
 
 ---
 
@@ -1105,15 +931,11 @@ inspect what the agent did and whether it produced edits
 
 列出 edits。
 
-List edits.
-
 ```text
 /edit
 ```
 
 Edit 是真实文件改动，不是普通工具调用。
-
-An edit is an actual file change, not just any tool call.
 
 ---
 
@@ -1121,13 +943,11 @@ An edit is an actual file change, not just any tool call.
 
 查看某个 edit 详情。
 
-Show one edit in detail.
-
 ```text
 /edit e_01...
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 summary
@@ -1151,8 +971,6 @@ patch preview
 
 按 session 过滤 edits。
 
-Filter edits by session.
-
 ```text
 /edit --session sess_01...
 ```
@@ -1162,8 +980,6 @@ Filter edits by session.
 ### `/edit --prompting <id>`
 
 按 prompting 过滤 edits。
-
-Filter edits by prompting.
 
 ```text
 /edit --prompting p_01...
@@ -1175,8 +991,6 @@ Filter edits by prompting.
 
 按 commit 过滤 edits。
 
-Filter edits by commit.
-
 ```text
 /edit --commit abc123
 ```
@@ -1186,8 +1000,6 @@ Filter edits by commit.
 ### `/edit --file <path>`
 
 按文件过滤 edits。
-
-Filter edits by file.
 
 ```text
 /edit --file src/auth.ts
@@ -1199,8 +1011,6 @@ Filter edits by file.
 
 查看已 revert 的 edits。
 
-Show reverted edits.
-
 ```text
 /edit --reverted
 ```
@@ -1210,8 +1020,6 @@ Show reverted edits.
 ### `/edit --conflicts`
 
 查看冲突相关 edits。
-
-Show conflict-related edits.
 
 ```text
 /edit --conflicts
@@ -1223,20 +1031,18 @@ Show conflict-related edits.
 
 撤销某个 edit。
 
-Revert an edit.
-
 ```text
 /edit revert e_01...
 ```
 
-行为 / Behavior:
+行为：
 
 ```text
-检查工作区是否安全 / checks worktree safety
-尝试反向应用 patch / reverse-applies the patch
-追加 revert event / appends revert events
-如果产生文件变化，记录新的 edit / records a new edit if files changed
-不会删除原 edit / does not delete the original edit
+检查工作区是否安全
+尝试反向应用 patch
+追加 revert event
+如果产生文件变化，记录新的 edit
+不会删除原 edit
 ```
 
 ---
@@ -1245,13 +1051,11 @@ Revert an edit.
 
 显示 Git 视角下的 Hutao trace。
 
-Show Hutao trace from a Git-centered view.
-
 ```text
 /git
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 current HEAD
@@ -1269,13 +1073,11 @@ uncommitted Hutao edits
 
 查看某个 commit 的 Hutao 关联。
 
-Show Hutao links for a commit.
-
 ```text
 /git abc123
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 commit hash
@@ -1296,13 +1098,11 @@ merge resolution events
 
 显示 Git graph 和 Hutao trace tree。
 
-Show Git graph with Hutao trace tree.
-
 ```text
 /git graph
 ```
 
-输出层级 / Output hierarchy:
+输出层级：
 
 ```text
 Commit
@@ -1317,8 +1117,6 @@ Commit
 
 按文件显示 Git graph。
 
-Show Git graph filtered by file.
-
 ```text
 /git graph --file src/auth.ts
 ```
@@ -1328,8 +1126,6 @@ Show Git graph filtered by file.
 ### `/git graph --range <range>`
 
 按 commit range 显示 Git graph。
-
-Show Git graph for a commit range.
 
 ```text
 /git graph --range main~10..main
@@ -1341,8 +1137,6 @@ Show Git graph for a commit range.
 
 查看某个文件相关的 Git / Hutao 记录。
 
-Show Git/Hutao records related to a file.
-
 ```text
 /git --file src/auth.ts
 ```
@@ -1352,8 +1146,6 @@ Show Git/Hutao records related to a file.
 ### `/git --range <range>`
 
 查看某个 commit range 的 Git / Hutao 记录。
-
-Show Git/Hutao records for a commit range.
 
 ```text
 /git --range abc123..def456
@@ -1365,18 +1157,11 @@ Show Git/Hutao records for a commit range.
 
 扫描 Git commits 并尝试建立 Hutao commit links。
 
-Scan Git commits and try to build Hutao commit links.
-
 ```text
 /git scan
 ```
 
-用途 / Purpose:
-
-```text
-提交代码后，通过 patch/file match 补充 commit_link
-link recent commits to Hutao edits by patch/file matching
-```
+用途：提交代码后，通过 patch/file match 补充 commit_link。
 
 ---
 
@@ -1384,18 +1169,11 @@ link recent commits to Hutao edits by patch/file matching
 
 从某个 prompting 发生前创建 forkSession。
 
-Create a fork session before a prompting.
-
 ```text
 /fork prompting p_01... --before
 ```
 
-用途 / Use when:
-
-```text
-想回到用户输入前，尝试另一种路线
-try a different path before the original human request
-```
+用途：回到用户输入前，尝试另一种路线。
 
 ---
 
@@ -1403,26 +1181,17 @@ try a different path before the original human request
 
 用同一条 prompting 文本重新尝试。
 
-Retry the same prompting text in a new fork session.
-
 ```text
 /fork prompting p_01... --retry
 ```
 
-注意 / Note:
-
-```text
-原 prompting 不会被覆盖
-The original prompting is not overwritten.
-```
+注意：原 prompting 不会被覆盖。
 
 ---
 
 ### `/fork prompting <id> --after`
 
 从某个 prompting 完成后继续。
-
-Continue after a prompting.
 
 ```text
 /fork prompting p_01... --after
@@ -1434,18 +1203,11 @@ Continue after a prompting.
 
 从某个 edit 发生前创建 forkSession。
 
-Create a fork session before an edit.
-
 ```text
 /fork edit e_01... --before
 ```
 
-用途 / Use when:
-
-```text
-想重做这个 edit，换一种实现
-redo an edit using a different approach
-```
+用途：重做这个 edit，换一种实现。
 
 ---
 
@@ -1453,26 +1215,17 @@ redo an edit using a different approach
 
 从某个 edit 之后继续。
 
-Continue after an edit.
-
 ```text
 /fork edit e_01... --after
 ```
 
-用途 / Use when:
-
-```text
-接受这个 edit，并在它基础上继续开发
-accept an edit and continue from it
-```
+用途：接受这个 edit，并在它基础上继续开发。
 
 ---
 
 ### `/fork commit <hash>`
 
 从 Git commit 创建 forkSession。
-
-Create a fork session from a Git commit.
 
 ```text
 /fork commit abc123
@@ -1484,8 +1237,6 @@ Create a fork session from a Git commit.
 
 打开 session merge 入口。
 
-Open the session merge entry point.
-
 ```text
 /merge session
 ```
@@ -1496,13 +1247,11 @@ Open the session merge entry point.
 
 预览合并某个 session。默认不改代码。
 
-Preview merging a session. This does not modify code by default.
-
 ```text
 /merge session fs_01...
 ```
 
-显示内容 / Shows:
+显示内容：
 
 ```text
 source session
@@ -1527,20 +1276,11 @@ available modes
 
 只导入历史，不修改代码。
 
-Import history only. No code changes.
-
 ```text
 /merge session fs_01... --history
 ```
 
-适合 / Best for:
-
-```text
-参考另一个 session
-比较不同尝试
-让 agent 看到另一条探索历史
-暂时不采用代码
-```
+适合：参考另一个 session、比较不同尝试、让 agent 看到另一条探索历史、暂时不采用代码。
 
 ---
 
@@ -1548,30 +1288,22 @@ Import history only. No code changes.
 
 按 source session 的 edit 顺序 replay patches。
 
-Replay source session edits in order.
-
 ```text
 /merge session fs_01... --apply-edits
 ```
 
-行为 / Behavior:
+行为：
 
 ```text
-检查 working tree 是否干净 / checks clean working tree
-读取 ordered edits / reads ordered edits
-跳过已 merge edits / skips already merged edits
-逐个 git apply --check / checks each patch
-逐个应用 patch / applies patches one by one
-记录 applied/conflict/skipped / records applied/conflict/skipped edits
+检查 working tree 是否干净
+读取 ordered edits
+跳过已 merge edits
+逐个 git apply --check
+逐个应用 patch
+记录 applied/conflict/skipped
 ```
 
-推荐原因 / Why recommended:
-
-```text
-保留 edit 因果链
-冲突能定位到具体 edit
-以后可以单独 revert 某个 applied edit
-```
+推荐原因：保留 edit 因果链，冲突能定位到具体 edit，以后可以单独 revert 某个 applied edit。
 
 ---
 
@@ -1579,34 +1311,19 @@ Replay source session edits in order.
 
 应用 source session 的最终结果快照。
 
-Apply the source session final result as a snapshot.
-
 ```text
 /merge session fs_01... --apply-tree
 ```
 
-适合 / Best for:
+适合：只关心最终结果、中间 edits 太乱、apply-edits 冲突太多。
 
-```text
-只关心最终结果
-中间 edits 太乱
-apply-edits 冲突太多
-```
-
-代价 / Tradeoff:
-
-```text
-edit 级可追溯性会弱一些
-usually weaker edit-level traceability
-```
+代价：edit 级可追溯性会弱一些。
 
 ---
 
 ### `/merge session <id> --dry-run`
 
 执行 dry run / preview，不实际应用代码。
-
-Dry-run a merge without applying code changes.
 
 ```text
 /merge session fs_01... --dry-run
@@ -1618,13 +1335,11 @@ Dry-run a merge without applying code changes.
 
 打开 merge wizard。
 
-Open the merge wizard.
-
 ```text
 /merge session fs_01... --wizard
 ```
 
-可选项 / Options:
+可选项：
 
 ```text
 Preview only
@@ -1643,8 +1358,6 @@ Abort
 
 手动解决冲突后，捕获 resolution edit。
 
-Capture manual conflict resolution after you resolve conflicts.
-
 ```text
 /merge session fs_01... --resolve
 ```
@@ -1655,13 +1368,11 @@ Capture manual conflict resolution after you resolve conflicts.
 
 跳过最近一次冲突 edit。
 
-Skip the last conflicting edit.
-
 ```text
 /merge session fs_01... --skip
 ```
 
-行为 / Behavior:
+行为：
 
 ```text
 记录 skipped edits
@@ -1675,8 +1386,6 @@ Skip the last conflicting edit.
 
 中止 merge。
 
-Abort a merge.
-
 ```text
 /merge session fs_01... --abort
 ```
@@ -1687,13 +1396,11 @@ Abort a merge.
 
 打开 edit 的 action 菜单。
 
-Open action menu for an edit.
-
 ```text
 /action edit e_01...
 ```
 
-常见操作 / Typical actions:
+常见操作：
 
 ```text
 view edit details
@@ -1711,13 +1418,11 @@ revert edit
 
 打开 prompting 的 action 菜单。
 
-Open action menu for a prompting.
-
 ```text
 /action prompting p_01...
 ```
 
-常见操作 / Typical actions:
+常见操作：
 
 ```text
 view prompting details
@@ -1734,13 +1439,11 @@ fork after prompting
 
 打开 session 的 action 菜单。
 
-Open action menu for a session.
-
 ```text
 /action session sess_01...
 ```
 
-常见操作 / Typical actions:
+常见操作：
 
 ```text
 view session details
@@ -1757,13 +1460,11 @@ open merge wizard
 
 打开 run 的 action 菜单。
 
-Open action menu for a run.
-
 ```text
 /action run r_01...
 ```
 
-常见操作 / Typical actions:
+常见操作：
 
 ```text
 view run details
@@ -1778,23 +1479,21 @@ view related commits
 
 运行 Hutao 诊断。
 
-Run Hutao diagnostics.
-
 ```text
 /doctor
 ```
 
-检查内容 / Checks:
+检查内容：
 
 ```text
-manifest 是否存在 / manifest presence
-sessions/events 是否可读 / session/event readability
-JSONL 是否损坏 / corrupt JSONL lines
-index 是否健康 / index health
-是否有绝对路径泄漏 / absolute path leaks
-是否有疑似 secret 泄漏 / secret-looking trace leaks
-.hutao 是否应视为不可信数据 / untrusted session warning
-.pi/extensions 风险提示 / .pi/extensions risk warning
+manifest 是否存在
+sessions/events 是否可读
+JSONL 是否损坏
+index 是否健康
+是否有绝对路径泄漏
+是否有疑似 secret 泄漏
+.hutao 是否应视为不可信数据
+.pi/extensions 风险提示
 ```
 
 ---
@@ -1803,13 +1502,11 @@ index 是否健康 / index health
 
 重建 `.hutao/index`。
 
-Rebuild `.hutao/index`.
-
 ```text
 /doctor rebuild
 ```
 
-重建文件 / Rebuilds:
+重建文件：
 
 ```text
 .hutao/index/sessions.json
@@ -1821,113 +1518,101 @@ Rebuild `.hutao/index`.
 
 ---
 
-## 合并策略 / Merge strategies
+## 合并策略
 
 ### Import History / 只导入历史
 
-命令 / Command:
+命令：
 
 ```text
 /merge session <id> --history
 ```
 
-中文：只把 source session 的 trace 历史导入当前视图，不改代码。
+只把 source session 的 trace 历史导入当前视图，不改代码。
 
-English: Imports source session history only. No code changes.
-
-适合 / Best for:
+适合：
 
 ```text
-参考另一个方案 / reviewing another approach
-比较 fork 结果 / comparing fork results
-暂时不采用代码 / not adopting code yet
+参考另一个方案
+比较 fork 结果
+暂时不采用代码
 ```
 
 ### Apply Edits / 应用编辑过程
 
-命令 / Command:
+命令：
 
 ```text
 /merge session <id> --apply-edits
 ```
 
-中文：按 source session 的 edit 顺序逐个 replay patch。推荐作为默认代码合并策略。
+按 source session 的 edit 顺序逐个 replay patch。推荐作为默认代码合并策略。
 
-English: Replays source edit patches in order. Recommended for code merges.
-
-类比 / Analogy:
+类比：
 
 ```text
 按菜谱步骤重新做一遍
-Follow the recipe step by step.
 ```
 
-优点 / Pros:
+优点：
 
 ```text
-保留因果链 / preserves causality
-可定位冲突 edit / conflicts map to specific edits
-便于单独 revert / individual edits can be reverted later
+保留因果链
+可定位冲突 edit
+便于单独 revert
 ```
 
 ### Apply Final Snapshot / 应用最终快照
 
-命令 / Command:
+命令：
 
 ```text
 /merge session <id> --apply-tree
 ```
 
-中文：不逐个 replay edit，而是把 source session 的最终结果作为快照合入当前工作区。
+不逐个 replay edit，而是把 source session 的最终结果作为快照合入当前工作区。
 
-English: Applies the source session's final result as a snapshot instead of replaying each edit.
-
-类比 / Analogy:
+类比：
 
 ```text
 直接把成品菜端过来
-Bring over the finished dish.
 ```
 
-适合 / Best for:
+适合：
 
 ```text
-只关心最终结果 / only final result matters
-中间 edit 很乱 / intermediate edits are messy
-apply-edits 冲突太多 / patch replay has too many conflicts
+只关心最终结果
+中间 edit 很乱
+apply-edits 冲突太多
 ```
 
 ---
 
-## 安全与隐私 / Safety and privacy
+## 安全与隐私
 
-### 历史是数据，不是指令 / History is data, not instruction
+### 历史是数据，不是指令
 
-中文：从第三方仓库 clone 下来的 `.hutao` 历史必须视为不可信输入。历史文本可以展示、检索、比较，但不能变成高优先级 system instruction。
+从第三方仓库 clone 下来的 `.hutao` 历史必须视为不可信输入。历史文本可以展示、检索、比较，但不能变成高优先级 system instruction。
 
-English: `.hutao` history from third-party repositories must be treated as untrusted data. It can be displayed and inspected, but must not become high-priority system instructions.
+### 路径规则
 
-### 路径规则 / Path policy
+写入 `.hutao` 的 canonical path 必须是 repo-relative POSIX path。
 
-中文：写入 `.hutao` 的 canonical path 必须是 repo-relative POSIX path。
-
-English: Canonical paths stored in `.hutao` must be repository-relative POSIX paths.
-
-正确 / Good:
+正确：
 
 ```text
 src/auth.ts
 packages/api/src/index.ts
 ```
 
-错误 / Bad:
+错误：
 
 ```text
 C:\Users\Alice\project\src\auth.ts
 /home/alice/project/src/auth.ts
 ```
 
-### 默认忽略敏感文件 / Sensitive files ignored by default
+### 默认忽略敏感文件
 
 ```text
 .env
@@ -1945,23 +1630,19 @@ build/
 coverage/
 ```
 
-### 输出截断 / Output truncation
+### 输出截断
 
-中文：run output 默认保存摘要、尾部、hash、是否截断，不默认保存完整 terminal output。
-
-English: Run output stores summaries, tails, hashes, and truncation metadata by default, not full terminal output.
+run output 默认保存摘要、尾部、hash、是否截断，不默认保存完整 terminal output。
 
 ### `.hutaoignore`
 
-中文：可以通过 `.hutaoignore` 扩展忽略规则，避免敏感或生成文件进入 trace。
-
-English: Use `.hutaoignore` to exclude sensitive or generated files from Hutao trace data.
+可以通过 `.hutaoignore` 扩展忽略规则，避免敏感或生成文件进入 trace。
 
 ---
 
-## 常见工作流 / Common workflows
+## 常见工作流
 
-### 查看仓库 AI 历史 / Inspect AI history
+### 查看仓库 AI 历史
 
 ```text
 /session
@@ -1972,13 +1653,13 @@ English: Use `.hutaoignore` to exclude sensitive or generated files from Hutao t
 /doctor
 ```
 
-### 从 commit 追溯 prompting / Trace a commit back to promptings
+### 从 commit 追溯 prompting
 
 ```text
 /git <commit>
 ```
 
-### 查看某个文件的 AI 改动历史 / Inspect AI history for a file
+### 查看某个文件的 AI 改动历史
 
 ```text
 /git graph --file src/auth.ts
@@ -1986,21 +1667,21 @@ English: Use `.hutaoignore` to exclude sensitive or generated files from Hutao t
 /edit --file src/auth.ts
 ```
 
-### 从旧 edit 继续 / Continue from an old edit
+### 从旧 edit 继续
 
 ```text
 /edit e_01...
 /fork edit e_01... --after
 ```
 
-### 重试旧 prompting / Retry an old prompting
+### 重试旧 prompting
 
 ```text
 /prompting p_01...
 /fork prompting p_01... --retry
 ```
 
-### 安全合并另一个 forkSession / Safely merge another fork session
+### 安全合并另一个 forkSession
 
 ```text
 /merge session fs_01...
@@ -2008,7 +1689,7 @@ English: Use `.hutaoignore` to exclude sensitive or generated files from Hutao t
 /merge session fs_01... --apply-edits
 ```
 
-### 重建索引 / Rebuild indexes
+### 重建索引
 
 ```text
 /doctor rebuild
@@ -2016,23 +1697,23 @@ English: Use `.hutaoignore` to exclude sensitive or generated files from Hutao t
 
 ---
 
-## 故障排查 / Troubleshooting
+## 故障排查
 
 ### Windows 识别不到 `hutao`
 
-Verify global install:
+验证全局安装：
 
 ```bash
 npm list -g --depth=0 hutao-agent
 ```
 
-Check command shim:
+检查命令入口：
 
 ```bash
 where hutao
 ```
 
-Reinstall from local package:
+从本地安装包重装：
 
 ```bash
 npm install -g --ignore-scripts "D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz"
@@ -2040,27 +1721,23 @@ npm install -g --ignore-scripts "D:\OneDrive\Desktop\新建文件夹\hutao-agent
 
 然后关闭并重新打开 PowerShell。
 
-Then close and reopen PowerShell.
+### 进入后提示没有模型
 
-### 进入后提示没有模型 / No models available
+说明还没有配置 provider/model。可以使用登录流程或配置模型。
 
-中文：说明还没有配置 provider/model。可以使用登录流程或配置模型。
-
-English: It means no provider/model is configured. Use the login flow or configure a model.
-
-可能用到 / Possible command:
+可能用到：
 
 ```text
 /login
 ```
 
-### `.hutao` 存在但数据不对 / `.hutao` exists but data looks stale
+### `.hutao` 存在但数据不对
 
 ```text
 /doctor rebuild
 ```
 
-### merge 冲突 / Merge conflicts
+### merge 冲突
 
 ```text
 /merge session <id> --resolve
@@ -2068,11 +1745,9 @@ English: It means no provider/model is configured. Use the login flow or configu
 /merge session <id> --abort
 ```
 
-### 工作区 dirty / Dirty working tree
+### 工作区 dirty
 
 下面操作通常需要 clean working tree：
-
-These operations usually require a clean working tree:
 
 ```text
 fork from old state
@@ -2084,15 +1759,11 @@ checkout historical state
 
 请先 commit、stash 或手动保存当前改动。
 
-Commit, stash, or save your current work first.
-
 ---
 
-## 当前安装包 / Current package artifact
+## 当前安装包
 
 仓库内安装包：
-
-Package artifact in repository:
 
 ```text
 packages/coding-agent/hutao-agent-0.77.0.tgz
@@ -2100,13 +1771,11 @@ packages/coding-agent/hutao-agent-0.77.0.tgz
 
 本机复制位置：
 
-Local copied package path:
-
 ```text
 D:\OneDrive\Desktop\新建文件夹\hutao-agent-0.77.0.tgz
 ```
 
-安装 / Install:
+安装：
 
 ```bash
 npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
@@ -2114,9 +1783,9 @@ npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
 
 ---
 
-## 当前状态 / Current status
+## 当前状态
 
-已实现 / Implemented:
+已实现：
 
 ```text
 hutao CLI
@@ -2143,7 +1812,7 @@ index rebuild
 secret/path safety checks
 ```
 
-仍然分阶段清理 / Still staged for future cleanup:
+仍然分阶段清理：
 
 ```text
 internal package names may still reference @earendil-works/pi-*
@@ -2153,8 +1822,6 @@ some docs/examples may still mention Pi internals
 ```
 
 Hutao trace 数据本身始终放在：
-
-Hutao trace data itself lives in:
 
 ```text
 .hutao/
@@ -2166,8 +1833,4 @@ Hutao trace data itself lives in:
 
 如果仓库中存在 LICENSE 文件，请以该文件为准。
 
-If a LICENSE file exists in this repository, follow that license.
-
 如果没有明确 LICENSE，请在重新分发前先获得项目所有者授权。
-
-If no explicit LICENSE is present, obtain permission from the project owner before redistribution.
