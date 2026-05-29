@@ -160,3 +160,73 @@ After implementation:
 4. Verify normal ID-based commands still work for advanced/debug usage.
 5. Verify resume/continue does not overwrite old session history.
 6. Verify revert remains preview-first.
+
+---
+
+## Menu localization scope
+
+Current decision: only localize Hutao-owned menus and add a `/language` command.
+
+### In scope
+
+1. Add a small Hutao i18n layer for menu labels.
+2. Support two languages initially:
+   - `zh-CN`
+   - `en`
+3. Default language: `zh-CN`.
+4. Allow temporary override via environment variable:
+
+```bash
+HUTAO_LANG=en
+HUTAO_LANG=zh-CN
+```
+
+5. Add `/language` command with a direction-key menu:
+
+```text
+选择语言 / Select language
+> 简体中文
+  English
+```
+
+6. Store local language preference in:
+
+```text
+.hutao/cache/preferences.json
+```
+
+This is intentionally local/cache data, not canonical trace history.
+
+7. Localize only Hutao-owned menu titles and menu choices, especially:
+   - `/session` selection and action menus
+   - `/prompting` selection and action menus
+   - `/edit` selection and action menus
+   - `/action` menus through shared helpers
+   - obvious `/merge` wizard choices if touched safely
+
+8. Convert menu logic away from comparing displayed labels. Use stable action IDs internally:
+
+```ts
+{ id: "viewPatch", label: t("edit.action.viewPatch") }
+```
+
+Then branch on `id`, not localized text.
+
+### Out of scope for this pass
+
+Do not localize:
+
+1. Full TUI.
+2. Model selector.
+3. Provider errors.
+4. Tool output.
+5. Stack traces.
+6. Detailed trace field labels such as `summary`, `session`, `files`, `patch hash`.
+7. Stored `.hutao/sessions` data.
+8. System prompt.
+9. Complete resume/continue semantics.
+
+### Risk rule
+
+Menu localization must not change trace storage, agent execution, or merge/revert semantics.
+If a menu item performs a dangerous action, keep existing confirmation/preview behavior.
