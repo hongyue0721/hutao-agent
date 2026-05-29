@@ -2,7 +2,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { editCommand, promptingCommand } from "../../src/hutao/commands.ts";
+import {
+	doctorCommand,
+	editCommand,
+	gitCommand,
+	mergeCommand,
+	promptingCommand,
+	sessionCommand,
+} from "../../src/hutao/commands.ts";
 import { CommitLinker } from "../../src/hutao/commit-linker.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoEvent } from "../../src/hutao/event-store.ts";
 import { ForkSessionManager } from "../../src/hutao/fork-session-manager.ts";
@@ -106,6 +113,27 @@ describe("Hutao integration safety", () => {
 		expect(contents).not.toContain("sk-");
 		expect(contents).toContain("[secret-redacted]");
 	});
+	it("shows richer command detail views and doctor diagnostics", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "detail");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "detail"]);
+		await new CommitLinker(repo).scanRecentCommits();
+		const head = await git.getHead();
+		await sessionCommand(recorder.getSessionId(), makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Promptings:");
+		expect(commandNotifications.at(-1)).toContain("Commit links:");
+		await editCommand(editId, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("merge/revert relation");
+		await gitCommand(head ?? "HEAD", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Commit ");
+		expect(commandNotifications.at(-1)).toContain("Promptings:");
+		await doctorCommand("rebuild", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Index rebuilt.");
+		expect(commandNotifications.at(-1)).toContain("sessions are untrusted data");
+	});
+
 	it("filters prompting and edit lists", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);
@@ -169,19 +197,36 @@ describe("MergeManager", () => {
 		expect(result.resolutionEdits).toHaveLength(1);
 		expect(readFileSync(join(repo, "file.txt"), "utf-8").replace(/\r\n/g, "\n")).toBe("source-final\n");
 	});
-	it("records abort and captures resolution edits", async () => {
+	it("records abort, skip, and captures resolution edits through command flow", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);
-		const { recorder } = await recordFileEdit(repo, "resolution-source");
+		const { recorder } = await recordFileEdit(repo, "resolution-command-source");
 		const sourceSession = recorder.getSessionId();
-		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_resolution_target");
-		new EventStore(repo, "sess_resolution_target").init(targetMetadata);
-		const abortResult = await new MergeManager(repo).mergeSession(sourceSession, "abort");
-		expect(abortResult.ok).toBe(true);
-		writeFileSync(join(repo, "file.txt"), "manual-resolution\n", "utf-8");
-		const resolution = await new MergeManager(repo).captureResolutionEdit("sess_resolution_target", sourceSession);
-		expect(resolution.ok).toBe(true);
-		expect(resolution.resolutionEdits).toHaveLength(1);
+		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_resolution_command_target");
+		new EventStore(repo, "sess_resolution_command_target").init(targetMetadata);
+		new EventStore(repo, "sess_resolution_command_target").append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "merge",
+			id: "m_conflict_for_skip",
+			session_id: "sess_resolution_command_target",
+			source_session: sourceSession,
+			target_session: "sess_resolution_command_target",
+			mode: "apply_edits",
+			status: "conflict",
+			imported_edits: ["e_conflict"],
+			applied_edits: [],
+			conflict_edits: ["e_conflict"],
+			skipped_edits: [],
+			resolution_edits: [],
+			created_at: new Date().toISOString(),
+		});
+		await mergeCommand(`session ${sourceSession} --skip`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Skipped conflicting edits");
+		await mergeCommand(`session ${sourceSession} --abort`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Merge aborted");
+		writeFileSync(join(repo, "file.txt"), "manual-command-resolution\n", "utf-8");
+		await mergeCommand(`session ${sourceSession} --resolve`, makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Captured merge resolution edit");
 	});
 });
 

@@ -154,6 +154,46 @@ export class MergeManager {
 		};
 	}
 
+	async skipLastConflict(sourceIdPrefix: string): Promise<MergeResult> {
+		const sessions = new SessionRegistry(this.repoRoot).readSessions();
+		const source = sessions.find((session) => session.id.startsWith(sourceIdPrefix));
+		if (!source) return this.empty("apply_edits", `Source session not found: ${sourceIdPrefix}`, false);
+		const events = readAllEvents(this.repoRoot);
+		const conflict = [...events]
+			.reverse()
+			.find(
+				(event) =>
+					event.type === "merge" &&
+					event.source_session === source.id &&
+					event.status === "conflict" &&
+					stringArray(event.conflict_edits).length > 0,
+			);
+		if (!conflict) return this.empty("apply_edits", "No conflicting merge event found to skip.", false);
+		const targetSession =
+			stringValue(conflict.target_session) ?? sessions.find((session) => session.id !== source.id)?.id;
+		if (!targetSession) return this.empty("apply_edits", "No target session found for skip event.", false);
+		const skipped = stringArray(conflict.conflict_edits);
+		this.writeMergeEvent(targetSession, source.id, "apply_edits", "completed", {
+			importedEdits: stringArray(conflict.imported_edits),
+			appliedEdits: [],
+			skippedEdits: skipped,
+			conflictEdits: [],
+			resolutionEdits: [],
+			beforeTree: await this.git.getTree(),
+			afterTree: await this.git.getTree(),
+		});
+		return {
+			ok: true,
+			mode: "apply_edits",
+			message: "Skipped conflicting edits. No code changes were applied by skip.",
+			appliedEdits: [],
+			skippedEdits: skipped,
+			conflictEdits: [],
+			resolutionEdits: [],
+			changedFiles: [],
+		};
+	}
+
 	private historyOnly(
 		targetSession: string,
 		sourceSession: string,

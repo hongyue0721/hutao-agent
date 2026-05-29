@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
 import { CommitLinker } from "./commit-linker.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { ForkSessionManager } from "./fork-session-manager.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { rebuildIndex } from "./index-builder.ts";
 import { MergeManager, type MergeMode } from "./merge-manager.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
@@ -63,6 +64,63 @@ function stringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+function firstLine(value: unknown, maxLength = 120): string {
+	return String(value ?? "")
+		.split(/\r?\n/)[0]
+		?.slice(0, maxLength);
+}
+
+function eventTitle(event: HutaoEvent): string {
+	return firstLine(event.text ?? event.summary ?? event.tool ?? event.id);
+}
+
+function relatedCommits(events: HutaoEvent[], id: unknown, field: "prompting_ids" | "edit_ids" | "run_ids"): string[] {
+	const value = String(id ?? "");
+	return events
+		.filter((event) => event.type === "commit_link" && stringArray(event[field]).includes(value))
+		.map((event) => String(event.commit));
+}
+
+function relatedMerges(events: HutaoEvent[], id: unknown): HutaoEvent[] {
+	const value = String(id ?? "");
+	return events.filter(
+		(event) =>
+			event.type === "merge" &&
+			(stringArray(event.imported_edits).includes(value) ||
+				stringArray(event.applied_edits).includes(value) ||
+				stringArray(event.conflict_edits).includes(value) ||
+				stringArray(event.skipped_edits).includes(value) ||
+				stringArray(event.resolution_edits).includes(value)),
+	);
+}
+
+function pushEventList(
+	lines: string[],
+	title: string,
+	events: HutaoEvent[],
+	render: (event: HutaoEvent) => string,
+): void {
+	lines.push(`${title}: ${events.length}`);
+	for (const event of events.slice(-12)) lines.push(`  ${render(event)}`);
+	if (events.length > 12) lines.push(`  ... ${events.length - 12} more`);
+}
+
+function readJsonlDiagnostics(path: string): { lines: number; corrupt: number } {
+	if (!existsSync(path)) return { lines: 0, corrupt: 0 };
+	let lines = 0;
+	let corrupt = 0;
+	for (const line of readFileSync(path, "utf-8").split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		lines += 1;
+		try {
+			JSON.parse(line);
+		} catch {
+			corrupt += 1;
+		}
+	}
+	return { lines, corrupt };
+}
+
 export async function sessionCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
 	await ctx.waitForIdle();
 	const repoRoot = await getRepoRoot(ctx);
@@ -76,33 +134,55 @@ export async function sessionCommand(args: string, ctx: ExtensionCommandContext)
 			"Hutao sessions",
 			sessions.map(
 				(session) =>
-					`${shortId(session.id)} ${session.kind} ${session.status} promptings=${events.filter((event) => event.session_id === session.id && event.type === "prompting").length} runs=${events.filter((event) => event.session_id === session.id && event.type === "run_finished").length} edits=${events.filter((event) => event.session_id === session.id && event.type === "edit").length}`,
+					`${shortId(session.id)} ${session.kind} ${session.status} promptings=${events.filter((event) => event.session_id === session.id && event.type === "prompting").length} runs=${events.filter((event) => event.session_id === session.id && event.type === "run_finished").length} edits=${events.filter((event) => event.session_id === session.id && event.type === "edit").length} merges=${events.filter((event) => event.session_id === session.id && event.type === "merge").length}`,
 			),
 		);
 		return;
 	}
 	const session = sessions.find((entry) => entry.id.startsWith(query));
 	if (!session) return notify(ctx, "Hutao session", [`Not found: ${query}`], "warning");
-	notify(ctx, `Session ${session.id}`, [
+	const sessionEvents = events.filter((event) => event.session_id === session.id);
+	const promptings = sessionEvents.filter((event) => event.type === "prompting");
+	const runs = sessionEvents.filter((event) => event.type === "run_finished");
+	const edits = sessionEvents.filter((event) => event.type === "edit");
+	const forks = events.filter((event) => event.type === "fork_session" && event.parent_session === session.id);
+	const merges = sessionEvents.filter((event) => event.type === "merge");
+	const commitLinks = sessionEvents.filter((event) => event.type === "commit_link");
+	const lines = [
 		`kind: ${session.kind}`,
 		`status: ${session.status}`,
 		`parent_session: ${session.parent_session ?? "none"}`,
 		`fork_from: ${session.fork_from ? JSON.stringify(session.fork_from) : "none"}`,
 		`base_git_head: ${session.base_git_head ?? "unknown"}`,
+		`base_tree: ${session.base_tree ?? "unknown"}`,
+		`last_git_head: ${session.current_git_head_at_last_write ?? "unknown"}`,
 		`updated_at: ${session.updated_at}`,
-		`promptings: ${
-			events
-				.filter((event) => event.session_id === session.id && event.type === "prompting")
-				.map((event) => shortId(event.id))
-				.join(", ") || "none"
-		}`,
-		`edits: ${
-			events
-				.filter((event) => event.session_id === session.id && event.type === "edit")
-				.map((event) => shortId(event.id))
-				.join(", ") || "none"
-		}`,
-	]);
+		`summary: ${session.summary || ""}`,
+		"",
+	];
+	pushEventList(lines, "Promptings", promptings, (event) => `${shortId(event.id)} ${eventTitle(event)}`);
+	pushEventList(
+		lines,
+		"Runs",
+		runs,
+		(event) => `${shortId(event.id)} ${event.tool ?? "tool"} ${event.status ?? "unknown"}`,
+	);
+	pushEventList(lines, "Edits", edits, (event) => `${shortId(event.id)} ${stringArray(event.files).join(", ")}`);
+	pushEventList(
+		lines,
+		"Forks",
+		forks,
+		(event) =>
+			`${shortId(event.id)} ${event.fork_from_type ?? ""}:${event.fork_from_id ?? ""} ${event.fork_mode ?? ""}`,
+	);
+	pushEventList(lines, "Merges", merges, (event) => `${shortId(event.id)} ${event.mode ?? ""} ${event.status ?? ""}`);
+	pushEventList(
+		lines,
+		"Commit links",
+		commitLinks,
+		(event) => `${String(event.commit).slice(0, 12)} ${event.link_method ?? "unknown"}`,
+	);
+	notify(ctx, `Session ${session.id}`, lines);
 }
 
 export async function promptingCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -153,18 +233,27 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 			(event.type === "run_finished" || event.type === "run_started") && event.parent_prompting === prompting.id,
 	);
 	const edits = events.filter((event) => event.type === "edit" && event.parent_prompting === prompting.id);
-	notify(ctx, `Prompting ${prompting.id}`, [
+	const commits = relatedCommits(events, prompting.id, "prompting_ids");
+	const lines = [
 		`session: ${prompting.session_id}`,
 		`git_head: ${prompting.git_head ?? "unknown"}`,
+		`git_tree: ${prompting.git_tree ?? "unknown"}`,
 		`cwd: ${prompting.cwd ?? "."}`,
 		`status: ${prompting.status ?? "unknown"}`,
+		`related commits: ${commits.map((commit) => commit.slice(0, 12)).join(", ") || "none"}`,
 		"",
 		String(prompting.text ?? ""),
 		"",
-		`runs: ${runs.map((run) => `${shortId(run.id)}:${run.tool}:${run.status ?? "started"}`).join(", ") || "none"}`,
-		`edits: ${edits.map((edit) => `${shortId(edit.id)}:${stringArray(edit.files).join(",")}`).join("; ") || "none"}`,
-		"actions: view runs, view edits, view commits, fork before/retry/after this prompting",
-	]);
+	];
+	pushEventList(
+		lines,
+		"Runs",
+		runs,
+		(run) => `${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? "started"} ${firstLine(run.output_summary)}`,
+	);
+	pushEventList(lines, "Edits", edits, (edit) => `${shortId(edit.id)} ${stringArray(edit.files).join(",")}`);
+	lines.push("actions: /fork prompting <id> --before | --retry | --after, /edit --prompting <id>, /git <commit>");
+	notify(ctx, `Prompting ${prompting.id}`, lines);
 }
 
 export async function editCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -225,19 +314,23 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 	if (!edit) return notify(ctx, "Hutao edit", [`Not found: ${query}`], "warning");
 	const patchPath = join(repoRoot, ".hutao", "sessions", String(edit.session_id), String(edit.patch));
 	const patchPreview = existsSync(patchPath) ? readFileSync(patchPath, "utf-8").slice(0, 5000) : "[patch missing]";
+	const commits = relatedCommits(events, edit.id, "edit_ids");
+	const merges = relatedMerges(events, edit.id);
+	const revertedBy = events.filter((event) => event.type === "edit_reverted" && event.edit_id === edit.id);
 	notify(ctx, `Edit ${edit.id}`, [
 		`summary: ${edit.summary ?? ""}`,
 		`session: ${edit.session_id}`,
 		`parent prompting: ${edit.parent_prompting}`,
 		`parent run: ${edit.parent_run}`,
-		`related commit: ${edit.related_commit ?? "unlinked"}`,
+		`related commits: ${commits.map((commit) => commit.slice(0, 12)).join(", ") || "unlinked"}`,
+		`merge/revert relation: merges=${merges.map((merge) => `${shortId(merge.id)}:${merge.mode}:${merge.status}`).join(", ") || "none"} reverted_by=${revertedBy.map((event) => shortId(event.revert_edit_id)).join(", ") || "none"}`,
 		`files: ${stringArray(edit.files).join(", ")}`,
 		`patch: ${edit.patch}`,
 		`patch hash: ${edit.patch_hash}`,
 		`before_tree: ${edit.before_tree ?? "unknown"}`,
 		`after_tree: ${edit.after_tree ?? "unknown"}`,
 		`status: ${edit.status ?? "unknown"}`,
-		"actions: view patch, view parent prompting, view parent run, fork before/after this edit, /edit revert <id>",
+		"actions: /prompting <parent>, /fork edit <id> --before|--after, /edit revert <id>",
 		"",
 		patchPreview,
 	]);
@@ -257,16 +350,65 @@ export async function gitCommand(args: string, ctx: ExtensionCommandContext): Pr
 	const promptings = events.filter((event) => event.type === "prompting");
 	const edits = events.filter((event) => event.type === "edit");
 	const commitLinks = events.filter((event) => event.type === "commit_link");
-	const lines = [`HEAD: ${(await git.getHead()) ?? "unknown"}`, `status: ${await git.getStatusSummary()}`];
-	for (const commitLink of commitLinks.slice(-20)) {
-		lines.push(
-			`Commit ${String(commitLink.commit).slice(0, 12)} edits=${stringArray(commitLink.edit_ids).join(",") || "none"}`,
+	const query = args.trim();
+	if (query) {
+		const resolved = await git.run(["rev-parse", query]);
+		if (!resolved.ok) return notify(ctx, "Hutao git", [`Commit not found: ${query}`], "warning");
+		const commit = resolved.stdout.trim();
+		const tree = await git.getCommitTree(commit);
+		const parents = await git.run(["show", "-s", "--format=%P", commit]);
+		const subject = await git.run(["show", "-s", "--format=%s", commit]);
+		const links = commitLinks.filter((event) => String(event.commit).startsWith(query) || event.commit === commit);
+		const promptingIds = new Set(links.flatMap((event) => stringArray(event.prompting_ids)));
+		const editIds = new Set(links.flatMap((event) => stringArray(event.edit_ids)));
+		const linkedPromptings = promptings.filter((event) => promptingIds.has(String(event.id)));
+		const linkedEdits = edits.filter((event) => editIds.has(String(event.id)));
+		const mergeEvents = events.filter(
+			(event) => event.type === "merge" && stringArray(event.resolution_edits).some((id) => editIds.has(id)),
 		);
+		const lines = [
+			`commit: ${commit}`,
+			`subject: ${subject.stdout.trim() || "unknown"}`,
+			`tree: ${tree ?? "unknown"}`,
+			`parents: ${parents.stdout.trim() || "none"}`,
+			`status: ${await git.getStatusSummary()}`,
+			`link methods: ${links.map((event) => String(event.link_method ?? "unknown")).join(", ") || "none"}`,
+			"",
+		];
+		pushEventList(lines, "Promptings", linkedPromptings, (event) => `${shortId(event.id)} ${eventTitle(event)}`);
+		pushEventList(
+			lines,
+			"Edits",
+			linkedEdits,
+			(event) => `${shortId(event.id)} ${stringArray(event.files).join(", ")}`,
+		);
+		pushEventList(
+			lines,
+			"Merge resolution events",
+			mergeEvents,
+			(event) => `${shortId(event.id)} ${event.mode ?? ""} ${event.status ?? ""}`,
+		);
+		if (links.length === 0)
+			lines.push("No Hutao commit_link found. Run /git scan to attempt linking recent commits.");
+		notify(ctx, `Commit ${commit.slice(0, 12)}`, lines);
+		return;
 	}
+	const lines = [`HEAD: ${(await git.getHead()) ?? "unknown"}`, `status: ${await git.getStatusSummary()}`];
+	pushEventList(
+		lines,
+		"Commit links",
+		commitLinks.slice(-20),
+		(event) => `${String(event.commit).slice(0, 12)} edits=${stringArray(event.edit_ids).join(",") || "none"}`,
+	);
+	pushEventList(
+		lines,
+		"Prompting tree",
+		promptings.slice(-20),
+		(prompting) => `${shortId(prompting.id)} head=${prompting.git_head ?? "unknown"}`,
+	);
 	for (const prompting of promptings.slice(-20)) {
-		lines.push(`Prompting ${shortId(prompting.id)} head=${prompting.git_head ?? "unknown"}`);
 		for (const edit of edits.filter((entry) => entry.parent_prompting === prompting.id)) {
-			lines.push(`  Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ")}`);
+			lines.push(`  └─ Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ")}`);
 		}
 	}
 	notify(ctx, "Hutao git", lines);
@@ -311,12 +453,45 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		return notify(
 			ctx,
 			"Hutao merge",
-			["Usage: /merge session <session_id> [--history|--apply-edits|--apply-tree]"],
+			["Usage: /merge session <session_id> [--history|--apply-edits|--apply-tree|--resolve|--skip|--abort]"],
 			"warning",
 		);
 	}
 	const sourceIdPrefix = parts[1];
 	if (!sourceIdPrefix) return notify(ctx, "Hutao merge", ["Source session id is required."], "warning");
+	const sessions = new SessionRegistry(repoRoot).readSessions();
+	const source = sessions.find((session) => session.id.startsWith(sourceIdPrefix));
+	if (parts.includes("--skip")) {
+		const confirmed = await ctx.ui.confirm(
+			"Hutao merge skip",
+			`Skip the last conflicting edit for source session ${sourceIdPrefix}? No code changes will be applied by skip.`,
+		);
+		if (!confirmed) return notify(ctx, "Hutao merge", ["Skip cancelled."]);
+		const result = await new MergeManager(repoRoot).skipLastConflict(sourceIdPrefix);
+		return notify(
+			ctx,
+			"Hutao merge",
+			[result.message, `skipped edits: ${result.skippedEdits.join(", ") || "none"}`],
+			result.ok ? "info" : "warning",
+		);
+	}
+	if (parts.includes("--resolve")) {
+		if (!source) return notify(ctx, "Hutao merge", [`Source session not found: ${sourceIdPrefix}`], "warning");
+		const target = sessions.find((session) => session.id !== source.id)?.id ?? sessions.at(-1)?.id;
+		if (!target) return notify(ctx, "Hutao merge", ["No target session exists."], "warning");
+		const confirmed = await ctx.ui.confirm(
+			"Hutao merge resolution",
+			`Capture current working tree diff as a merge resolution for ${source.id}?`,
+		);
+		if (!confirmed) return notify(ctx, "Hutao merge", ["Resolution capture cancelled."]);
+		const result = await new MergeManager(repoRoot).captureResolutionEdit(target, source.id);
+		return notify(
+			ctx,
+			"Hutao merge",
+			[result.message, `resolution edits: ${result.resolutionEdits.join(", ") || "none"}`],
+			result.ok ? "info" : "warning",
+		);
+	}
 	const mode: MergeMode = parts.includes("--abort")
 		? "abort"
 		: parts.includes("--history")
@@ -336,5 +511,62 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		`conflicts: ${result.conflictEdits.join(", ") || "none"}`,
 		`resolution edits: ${result.resolutionEdits.join(", ") || "none"}`,
 	];
+	if (!result.ok && result.conflictEdits.length > 0) {
+		lines.push(
+			"next actions: resolve manually, then /merge session <source> --resolve; /merge session <source> --skip; or /merge session <source> --abort",
+		);
+	}
 	notify(ctx, mode === "preview" ? "Hutao merge preview" : "Hutao merge", lines, result.ok ? "info" : "warning");
+}
+
+export async function doctorCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const repoRoot = await getRepoRoot(ctx);
+	if (!repoRoot) return notify(ctx, "Hutao doctor", ["Not in a Git repository."], "warning");
+	if (args.trim() === "rebuild" || args.trim() === "--rebuild") rebuildIndex(repoRoot);
+	const hutaoDir = join(repoRoot, ".hutao");
+	const sessionsDir = join(hutaoDir, "sessions");
+	const sessions = new SessionRegistry(repoRoot).readSessions();
+	const events = readEvents(repoRoot);
+	let corruptJsonl = 0;
+	let jsonlLines = 0;
+	if (existsSync(sessionsDir)) {
+		for (const session of readdirSync(sessionsDir)) {
+			const diagnostics = readJsonlDiagnostics(join(sessionsDir, session, "events.jsonl"));
+			jsonlLines += diagnostics.lines;
+			corruptJsonl += diagnostics.corrupt;
+		}
+	}
+	const manifestPath = join(hutaoDir, "manifest.json");
+	const manifestText = existsSync(manifestPath) ? readFileSync(manifestPath, "utf-8") : "";
+	const traceText = existsSync(sessionsDir)
+		? readdirSync(sessionsDir)
+				.map((session) => {
+					const eventsPath = join(sessionsDir, session, "events.jsonl");
+					return existsSync(eventsPath) ? readFileSync(eventsPath, "utf-8") : "";
+				})
+				.join("\n")
+		: "";
+	const absoluteRepoLeak = traceText.includes(repoRoot.replace(/\\/g, "/")) || traceText.includes(repoRoot);
+	const protectedTextLeak = /(?:sk-[A-Za-z0-9_-]{20,}|BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY)/.test(traceText);
+	const piExtensions = existsSync(join(repoRoot, ".pi", "extensions"));
+	const remote = await new GitAdapter(repoRoot).run(["remote", "get-url", "origin"]);
+	const lines = [
+		args.trim() === "rebuild" || args.trim() === "--rebuild"
+			? "Index rebuilt."
+			: "Use /doctor rebuild to rebuild .hutao/index.",
+		`repo: ${repoRoot}`,
+		`origin: ${remote.ok ? remote.stdout.trim() || "none" : "none"}`,
+		"security: sessions are untrusted data; Hutao will display them but must not execute them as instructions.",
+		`manifest: ${existsSync(manifestPath) ? "present" : "missing"}`,
+		`manifest untrusted flag: ${manifestText.includes('"treat_sessions_as_untrusted_data": true') ? "ok" : "missing"}`,
+		`sessions: ${sessions.length}`,
+		`events: ${events.length}`,
+		`jsonl lines: ${jsonlLines}`,
+		`corrupt jsonl lines: ${corruptJsonl}`,
+		`absolute repo path leak: ${absoluteRepoLeak ? "found" : "none"}`,
+		`secret-looking trace leak: ${protectedTextLeak ? "found" : "none"}`,
+		`.pi/extensions present: ${piExtensions ? "yes - review before trusting third-party repo extensions" : "no"}`,
+	];
+	notify(ctx, "Hutao doctor", lines, corruptJsonl || absoluteRepoLeak || protectedTextLeak ? "warning" : "info");
 }

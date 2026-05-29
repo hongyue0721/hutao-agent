@@ -1,6 +1,14 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "../core/extensions/types.ts";
 import { isToolCallEventType } from "../core/extensions/types.ts";
-import { editCommand, forkCommand, gitCommand, mergeCommand, promptingCommand, sessionCommand } from "./commands.ts";
+import {
+	doctorCommand,
+	editCommand,
+	forkCommand,
+	gitCommand,
+	mergeCommand,
+	promptingCommand,
+	sessionCommand,
+} from "./commands.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
@@ -98,4 +106,5 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("git", { description: "Show Hutao Git trace", handler: gitCommand });
 	pi.registerCommand("fork", { description: "Create a Hutao forkSession", handler: forkCommand });
 	pi.registerCommand("merge", { description: "Preview or merge Hutao sessions", handler: mergeCommand });
+	pi.registerCommand("doctor", { description: "Validate or rebuild Hutao trace data", handler: doctorCommand });
 }
