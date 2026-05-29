@@ -1,13 +1,14 @@
 {
-	"name": "@earendil-works/pi-coding-agent",
+	"name": "hutao-agent",
 	"version": "0.77.0",
-	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"description": "Repo-local, Git-native coding agent with traceable prompting, run, and edit history",
 	"type": "module",
 	"piConfig": {
+		"name": "hutao",
 		"configDir": ".pi"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"hutao": "dist/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -78,6 +79,7 @@
 		"vitest": "3.2.4"
 	},
 	"keywords": [
+		"hutao",
 		"coding-agent",
 		"ai",
 		"llm",
@@ -89,7 +91,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/hongyue0721/hutao-agent.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {
