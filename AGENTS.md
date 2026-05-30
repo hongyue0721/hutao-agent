@@ -1769,6 +1769,33 @@ Phase D 验收清单：
 11. 旧 sess_<id> 保持 append-only，不接收 continuation 的新 prompting/run/edit。
 ```
 
+当前实现状态：
+
+```text
+已完成：
+1. 显式 /fork prompting/edit/commit 命令进入 HutaoForkCoordinator。
+2. /prompting 与 /edit action-menu 的 resume/fork 入口复用同一个 coordinator。
+3. Native branch 创建隔离到 NativeForkManager。
+4. ForkTargetResolver 根据 Hutao prompting/edit fact 与 native_entry_link 解析 native entry target。
+5. SessionManager.createBranchedSession 与 ctx.fork 支持传入 coordinator 生成的 fs_<id>。
+6. 显式 fork 成功时，native branch 与 Hutao forkSession metadata 使用同一个 fs_<id>。
+7. fork_session event 写入 native_fork status/linkage metadata。
+8. native entry mapping 缺失时进入 degraded mode 并提示，不能伪装成完整 native fork。
+9. retry_prompting 在 native fork 成功后会把原 prompting 文本预填到 fresh context editor。
+
+尚未完成：
+1. armed historical context 自动 fork 尚未接入 interactive submit pipeline。
+2. /edit --before 的 native branch 目前锚定到可解析的 edit/run native entry；真正 before/after 文件状态由 Hutao worktree restore/replay 处理。
+```
+
+本阶段验证命令：
+
+```bash
+npm run check
+npm run build
+npx vitest run packages/coding-agent/test/session-manager/file-operations.test.ts packages/coding-agent/test/hutao/core.test.ts
+```
+
 ### 16.3 Prompting fork modes
 
 ```text

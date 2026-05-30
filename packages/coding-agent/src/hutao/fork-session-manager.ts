@@ -14,6 +14,22 @@ export interface ForkSessionResult {
 	reason?: string;
 }
 
+export interface NativeForkEventInfo {
+	status: "created" | "degraded" | "cancelled" | "skipped";
+	source_session_id?: string;
+	source_session_file?: string;
+	target_entry_id?: string;
+	position?: "before" | "at";
+	forked_session_id?: string;
+	forked_session_file?: string;
+	degraded_reason?: string;
+}
+
+export interface CreateForkOptions {
+	sessionId?: string;
+	nativeFork?: NativeForkEventInfo;
+}
+
 function stringValue(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
@@ -33,17 +49,22 @@ export class ForkSessionManager {
 		this.git = new GitAdapter(repoRoot);
 	}
 
-	async createFork(sourceType: ForkSourceType, sourceIdPrefix: string, mode: ForkMode): Promise<ForkSessionResult> {
+	async createFork(
+		sourceType: ForkSourceType,
+		sourceIdPrefix: string,
+		mode: ForkMode,
+		options: CreateForkOptions = {},
+	): Promise<ForkSessionResult> {
 		if ((await this.git.getStatusSummary()) !== "clean") {
 			return { ok: false, reason: "Working tree is dirty. Commit, stash, or clean before forking from history." };
 		}
 		const events = readAllEvents(this.repoRoot);
-		if (sourceType === "commit") return this.createCommitFork(sourceIdPrefix);
+		if (sourceType === "commit") return this.createCommitFork(sourceIdPrefix, options);
 		const source = events.find((event) => event.type === sourceType && String(event.id).startsWith(sourceIdPrefix));
 		if (!source) return { ok: false, reason: `Source not found: ${sourceIdPrefix}` };
 		const restore = await this.restoreHistoryState(events, source, sourceType, mode);
 		if (!restore.ok) return restore;
-		const forkId = createHutaoId("fs");
+		const forkId = options.sessionId ?? createHutaoId("fs");
 		const now = new Date().toISOString();
 		const metadata: HutaoSessionMetadata = {
 			schema_version: HUTAO_SCHEMA_VERSION,
@@ -76,13 +97,14 @@ export class ForkSessionManager {
 			base_tree: metadata.base_tree,
 			created_by: "human",
 			reason: metadata.summary,
+			native_fork: options.nativeFork,
 			created_at: now,
 		});
 		rebuildIndex(this.repoRoot);
 		return { ok: true, sessionId: forkId };
 	}
 
-	private async createCommitFork(commitPrefix: string): Promise<ForkSessionResult> {
+	private async createCommitFork(commitPrefix: string, options: CreateForkOptions = {}): Promise<ForkSessionResult> {
 		const resolved = await this.git.run(["rev-parse", "--verify", commitPrefix]);
 		if (!resolved.ok) return { ok: false, reason: `Commit not found: ${commitPrefix}` };
 		const commit = resolved.stdout.trim();
@@ -94,7 +116,7 @@ export class ForkSessionManager {
 				if (!apply.ok) return { ok: false, reason: apply.stderr || apply.stdout };
 			}
 		}
-		const forkId = createHutaoId("fs");
+		const forkId = options.sessionId ?? createHutaoId("fs");
 		const now = new Date().toISOString();
 		const metadata: HutaoSessionMetadata = {
 			schema_version: HUTAO_SCHEMA_VERSION,
@@ -127,6 +149,7 @@ export class ForkSessionManager {
 			base_tree: metadata.base_tree,
 			created_by: "human",
 			reason: metadata.summary,
+			native_fork: options.nativeFork,
 			created_at: now,
 		});
 		rebuildIndex(this.repoRoot);

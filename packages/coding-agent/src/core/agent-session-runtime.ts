@@ -245,8 +245,12 @@ export class AgentSessionRuntime {
 
 	async fork(
 		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-	): Promise<{ cancelled: boolean; selectedText?: string }> {
+		options?: {
+			position?: "before" | "at";
+			sessionId?: string;
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
+	): Promise<{ cancelled: boolean; selectedText?: string; sessionFile?: string }> {
 		const position = options?.position ?? "before";
 		const beforeResult = await this.emitBeforeFork(entryId, { position });
 		if (beforeResult.cancelled) {
@@ -278,8 +282,9 @@ export class AgentSessionRuntime {
 			}
 			const sessionDir = this.session.sessionManager.getSessionDir();
 			if (!targetLeafId) {
-				const sessionManager = SessionManager.create(this.cwd, sessionDir);
-				sessionManager.newSession({ parentSession: currentSessionFile });
+				const sessionManager = SessionManager.create(this.cwd, sessionDir, { id: options?.sessionId });
+				sessionManager.newSession({ id: options?.sessionId, parentSession: currentSessionFile });
+				const newSessionFile = sessionManager.getSessionFile();
 				await this.teardownCurrent("fork", sessionManager.getSessionFile());
 				this.apply(
 					await this.createRuntime({
@@ -290,11 +295,11 @@ export class AgentSessionRuntime {
 					}),
 				);
 				await this.finishSessionReplacement(options?.withSession);
-				return { cancelled: false, selectedText };
+				return { cancelled: false, selectedText, sessionFile: newSessionFile };
 			}
 
 			const sessionManager = SessionManager.open(currentSessionFile, sessionDir);
-			const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
+			const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId, { id: options?.sessionId });
 			if (!forkedSessionPath) {
 				throw new Error("Failed to create forked session");
 			}
@@ -308,14 +313,14 @@ export class AgentSessionRuntime {
 				}),
 			);
 			await this.finishSessionReplacement(options?.withSession);
-			return { cancelled: false, selectedText };
+			return { cancelled: false, selectedText, sessionFile: forkedSessionPath };
 		}
 
 		const sessionManager = this.session.sessionManager;
 		if (!targetLeafId) {
-			sessionManager.newSession({ parentSession: this.session.sessionFile });
+			sessionManager.newSession({ id: options?.sessionId, parentSession: this.session.sessionFile });
 		} else {
-			sessionManager.createBranchedSession(targetLeafId);
+			sessionManager.createBranchedSession(targetLeafId, { id: options?.sessionId });
 		}
 		await this.teardownCurrent("fork", sessionManager.getSessionFile());
 		this.apply(
@@ -327,7 +332,7 @@ export class AgentSessionRuntime {
 			}),
 		);
 		await this.finishSessionReplacement(options?.withSession);
-		return { cancelled: false, selectedText };
+		return { cancelled: false, selectedText, sessionFile: sessionManager.getSessionFile() };
 	}
 
 	/**

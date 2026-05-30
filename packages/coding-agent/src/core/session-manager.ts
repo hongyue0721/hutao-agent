@@ -1485,7 +1485,10 @@ export class SessionManager {
 	 * Useful for extracting a single conversation path from a branched session.
 	 * Returns the new session file path, or undefined if not persisting.
 	 */
-	createBranchedSession(leafId: string): string | undefined {
+	createBranchedSession(leafId: string, options?: NewSessionOptions): string | undefined {
+		if (options?.id !== undefined) {
+			assertValidSessionId(options.id);
+		}
 		const previousSessionFile = this.sessionFile;
 		const path = this.getBranch(leafId);
 		if (path.length === 0) {
@@ -1496,7 +1499,7 @@ export class SessionManager {
 		const pathWithoutLabels = path.filter((e) => e.type !== "label");
 
 		const repoLocal = this.persist && isRepoLocalSessionsDir(this.sessionDir);
-		const newSessionId = repoLocal ? createRepoLocalSessionId("fork") : createSessionId();
+		const newSessionId = options?.id ?? (repoLocal ? createRepoLocalSessionId("fork") : createSessionId());
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 		const newSessionFile = repoLocal
@@ -1509,11 +1512,13 @@ export class SessionManager {
 			id: newSessionId,
 			timestamp,
 			cwd: repoLocal ? "." : this.cwd,
-			parentSession: this.persist
-				? repoLocal
-					? toRepoLocalSessionRef(this.sessionDir, previousSessionFile)
-					: previousSessionFile
-				: undefined,
+			parentSession:
+				options?.parentSession ??
+				(this.persist
+					? repoLocal
+						? toRepoLocalSessionRef(this.sessionDir, previousSessionFile)
+						: previousSessionFile
+					: undefined),
 		};
 
 		// Collect labels for entries in the path

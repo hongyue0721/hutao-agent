@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
 import { CommitLinker } from "./commit-linker.ts";
 import type { HutaoEvent } from "./event-store.ts";
-import { ForkSessionManager } from "./fork-session-manager.ts";
+import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
@@ -224,28 +224,63 @@ async function resumeSession(sessionId: string, repoRoot: string, ctx: Extension
 	]);
 }
 
+async function runCoordinatedFork(
+	repoRoot: string,
+	ctx: ExtensionCommandContext,
+	sourceType: "prompting" | "edit" | "commit",
+	sourceId: string,
+	mode: "before" | "retry" | "after",
+	title = "Hutao fork",
+): Promise<HutaoForkResult> {
+	const result = await new HutaoForkCoordinator(repoRoot, ctx).fork({
+		sourceType,
+		sourceIdPrefix: sourceId,
+		mode,
+		onCompleted: async (freshCtx, completed) => {
+			notify(freshCtx, title, [
+				`Created forkSession ${completed.sessionId}`,
+				`native branch: ${completed.nativeStatus ?? "unknown"}`,
+				completed.nativeSessionFile ? `native session: ${completed.nativeSessionFile}` : "native session: unknown",
+				completed.retryText
+					? "Retry text is available from the original prompting."
+					: "Continue chatting normally.",
+				"New promptings/runs/edits will be recorded in the forkSession.",
+			]);
+			if (completed.retryText && !freshCtx.ui.getEditorText().trim()) {
+				freshCtx.ui.setEditorText(completed.retryText);
+			}
+		},
+	});
+	if (!result.ok) {
+		notify(ctx, title, [result.reason ?? "Fork failed."], "warning");
+		return result;
+	}
+	if (result.nativeStatus !== "created") {
+		notify(
+			ctx,
+			title,
+			[
+				`Created forkSession ${result.sessionId}`,
+				`native branch: ${result.nativeStatus ?? "degraded"}`,
+				result.degradedReason ?? "Native branch unavailable.",
+				"Continue chatting normally; Hutao trace will record new work in the forkSession.",
+			],
+			"warning",
+		);
+	}
+	return result;
+}
+
 async function resumeFromPrompting(
 	prompting: HutaoEvent,
 	repoRoot: string,
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
-	const result = await new ForkSessionManager(repoRoot).createFork("prompting", String(prompting.id), "after");
-	if (!result.ok) return notify(ctx, "Hutao resume", [result.reason ?? "Resume failed."], "warning");
-	notify(ctx, "Hutao resume", [
-		`Created continuation forkSession ${result.sessionId}`,
-		`from prompting: ${prompting.id}`,
-		"Continue chatting normally; new promptings/runs/edits will be recorded in the continuation session.",
-	]);
+	await runCoordinatedFork(repoRoot, ctx, "prompting", String(prompting.id), "after", "Hutao resume");
 }
 
 async function resumeFromEdit(edit: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
-	const result = await new ForkSessionManager(repoRoot).createFork("edit", String(edit.id), "after");
-	if (!result.ok) return notify(ctx, "Hutao resume", [result.reason ?? "Resume failed."], "warning");
-	notify(ctx, "Hutao resume", [
-		`Created continuation forkSession ${result.sessionId}`,
-		`from edit: ${edit.id}`,
-		"Continue chatting normally; new promptings/runs/edits will be recorded in the continuation session.",
-	]);
+	await runCoordinatedFork(repoRoot, ctx, "edit", String(edit.id), "after", "Hutao resume");
 }
 
 async function runSessionAction(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -749,12 +784,10 @@ export async function forkCommand(args: string, ctx: ExtensionCommandContext): P
 	if (sourceType !== "prompting" && sourceType !== "edit" && sourceType !== "commit") {
 		return notify(ctx, "Hutao fork", [`Unsupported fork source: ${sourceType}`], "warning");
 	}
-	const result = await new ForkSessionManager(repoRoot).createFork(sourceType, sourceId, mode);
-	if (!result.ok) return notify(ctx, "Hutao fork", [result.reason ?? "Fork failed."], "warning");
-	notify(ctx, "Hutao fork", [
-		`Created forkSession ${result.sessionId}`,
-		"Working tree has been restored to the requested history state when possible.",
-	]);
+	const result = await runCoordinatedFork(repoRoot, ctx, sourceType, sourceId, mode, "Hutao fork");
+	if (!result.ok) return;
+	if (result.nativeStatus === "created") return;
+	return;
 }
 
 export async function mergeCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {

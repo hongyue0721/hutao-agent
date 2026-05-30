@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getRepoLocalSessionDir, SessionManager } from "../../src/core/session-manager.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION } from "../../src/hutao/event-store.ts";
+import { HutaoForkCoordinator } from "../../src/hutao/fork-coordinator.ts";
 import { GitAdapter } from "../../src/hutao/git-adapter.ts";
 import { HutaoIgnore } from "../../src/hutao/hutao-ignore.ts";
 import { rebuildIndex } from "../../src/hutao/index-builder.ts";
@@ -300,6 +301,88 @@ describe("TraceRecorder", () => {
 		}>;
 		expect(edits[0].binary).toBe(true);
 		expect(edits[0].patch).toBeNull();
+	});
+});
+
+describe("HutaoForkCoordinator", () => {
+	function fakeForkContext(onFork: (entryId: string, options: Record<string, unknown>) => void) {
+		return {
+			fork: async (entryId: string, options?: Record<string, unknown>) => {
+				onFork(entryId, options ?? {});
+				return {
+					cancelled: false,
+					sessionFile: join(makeTempDir(), String(options?.sessionId), "native-session.jsonl"),
+				};
+			},
+		} as any;
+	}
+
+	it("creates degraded Hutao fork metadata when native entry mapping is missing", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const recorder = new TraceRecorder(repo);
+		await recorder.init();
+		await recorder.recordPrompting("fork without native mapping", repo);
+		const prompting = readTraceEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting")!;
+		let nativeForkCalled = false;
+
+		const result = await new HutaoForkCoordinator(
+			repo,
+			fakeForkContext(() => {
+				nativeForkCalled = true;
+			}),
+		).fork({ sourceType: "prompting", sourceIdPrefix: String(prompting.id), mode: "after" });
+
+		expect(result.ok).toBe(true);
+		expect(result.nativeStatus).toBe("degraded");
+		expect(nativeForkCalled).toBe(false);
+		const forkEvents = readTraceEvents(repo, result.sessionId!);
+		const fork = forkEvents.find((event) => event.type === "fork_session")!;
+		expect((fork.native_fork as { status?: string }).status).toBe("degraded");
+		expect((fork.native_fork as { degraded_reason?: string }).degraded_reason).toContain("No native entry mapping");
+	});
+
+	it("passes one coordinator-generated fs id to native fork and Hutao fork metadata", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir);
+		const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+			sessionId: nativeSession.getSessionId(),
+			sessionFile: nativeSession.getSessionFile(),
+			leafEntryId: nativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		await recorder.recordPrompting("fork with native mapping", repo);
+		const nativeEntryId = nativeSession.appendMessage({
+			role: "user",
+			content: "fork with native mapping",
+			timestamp: Date.now(),
+		});
+		await recorder.recordNativeEntryLink(nativeSession.getEntry(nativeEntryId)!);
+		const prompting = readTraceEvents(repo, nativeSession.getSessionId()).find(
+			(event) => event.type === "prompting",
+		)!;
+		let capturedEntryId: string | undefined;
+		let capturedSessionId: string | undefined;
+
+		const result = await new HutaoForkCoordinator(
+			repo,
+			fakeForkContext((entryId, options) => {
+				capturedEntryId = entryId;
+				capturedSessionId = options.sessionId as string;
+			}),
+		).fork({ sourceType: "prompting", sourceIdPrefix: String(prompting.id), mode: "after" });
+
+		expect(result.ok).toBe(true);
+		expect(result.nativeStatus).toBe("created");
+		expect(capturedEntryId).toBe(nativeEntryId);
+		expect(capturedSessionId).toBe(result.sessionId);
+		const forkEvents = readTraceEvents(repo, result.sessionId!);
+		const fork = forkEvents.find((event) => event.type === "fork_session")!;
+		expect(fork.id).toBe(result.sessionId);
+		expect((fork.native_fork as { status?: string }).status).toBe("created");
+		expect((fork.native_fork as { forked_session_id?: string }).forked_session_id).toBe(result.sessionId);
 	});
 });
 

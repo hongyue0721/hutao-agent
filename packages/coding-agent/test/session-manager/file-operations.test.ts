@@ -328,6 +328,22 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(findMostRecentSession(sessionDir, repo)).toBe(forkedFile);
 	});
 
+	it("forks repo-local native sessions with a coordinator-provided fs id", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const session = SessionManager.create(repo, sessionDir);
+		appendRound(session, "root");
+		const originalFile = session.getSessionFile()!;
+		const forkedId = "fs_01J00000000000000000000000";
+		const forkedFile = session.createBranchedSession(session.getLeafId()!, { id: forkedId })!;
+
+		expect(session.getSessionId()).toBe(forkedId);
+		expect(forkedFile).toBe(join(sessionDir, forkedId, "native-session.jsonl"));
+		const header = JSON.parse(readFileSync(forkedFile, "utf-8").split(/\r?\n/)[0]!);
+		expect(header.id).toBe(forkedId);
+		expect(header.cwd).toBe(".");
+		expect(header.parentSession).toBe(`.hutao/sessions/${originalFile.split(/[\\/]/).at(-2)}/native-session.jsonl`);
+	});
+
 	it("redacts repo-local native session absolute paths on disk while preserving in-memory context", async () => {
 		const sessionDir = getRepoLocalSessionDir(repo)!;
 		const session = SessionManager.create(repo, sessionDir);

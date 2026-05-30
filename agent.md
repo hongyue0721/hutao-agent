@@ -186,6 +186,33 @@ Tasks:
 8. New work writes to fs_<id> with fork_session event.
 ```
 
+Current implementation status:
+
+```text
+Done:
+1. Explicit /fork prompting/edit/commit commands use HutaoForkCoordinator.
+2. /prompting and /edit action-menu fork/resume entries reuse the same coordinator.
+3. Native branch creation is isolated in NativeForkManager.
+4. ForkTargetResolver resolves Hutao prompting/edit facts to native entry links when mapping exists.
+5. SessionManager / ctx.fork can accept a coordinator-provided fs_<id>.
+6. Native branch and Hutao forkSession metadata now share one fs_<id> for explicit forks.
+7. fork_session events include native_fork status/linkage metadata.
+8. Missing native entry mapping records degraded mode and warns instead of faking full native fork.
+9. retry_prompting pre-fills the original prompting text in the fresh context when native fork succeeds.
+
+Not done yet:
+1. Armed historical context auto-fork before the next normal chat input is not wired into the interactive submit pipeline yet.
+2. /edit --before native branch currently anchors at the best available edit/run entry while worktree restore handles before/after state.
+```
+
+Validation:
+
+```text
+npm run check
+npm run build
+npx vitest run packages/coding-agent/test/session-manager/file-operations.test.ts packages/coding-agent/test/hutao/core.test.ts
+```
+
 ### Phase E — merge/revert native alignment
 
 Goal: trace merge/revert facts also appear in the conversation UX.

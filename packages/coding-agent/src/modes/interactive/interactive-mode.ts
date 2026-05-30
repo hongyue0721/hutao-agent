@@ -1516,7 +1516,7 @@ export class InteractiveMode {
 							this.editor.setText(result.selectedText ?? "");
 							this.showStatus("Forked to new session");
 						}
-						return { cancelled: result.cancelled };
+						return { cancelled: result.cancelled, sessionFile: result.sessionFile };
 					} catch (error: unknown) {
 						return this.handleFatalRuntimeError("Failed to fork session", error);
 					}

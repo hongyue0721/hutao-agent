@@ -322,7 +322,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				newSession: async (options) => runtimeHost.newSession(options),
 				fork: async (entryId, forkOptions) => {
 					const result = await runtimeHost.fork(entryId, forkOptions);
-					return { cancelled: result.cancelled };
+					return { cancelled: result.cancelled, sessionFile: result.sessionFile };
 				},
 				navigateTree: async (targetId, options) => {
 					const result = await session.navigateTree(targetId, {

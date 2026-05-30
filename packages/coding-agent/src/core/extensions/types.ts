@@ -344,8 +344,13 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	/** Fork from a specific entry, creating a new session file. */
 	fork(
 		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-	): Promise<{ cancelled: boolean }>;
+		options?: {
+			position?: "before" | "at";
+			/** Optional externally coordinated session id, used by Hutao to align native and trace fork ids. */
+			sessionId?: string;
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
+	): Promise<{ cancelled: boolean; sessionFile?: string }>;
 
 	/** Navigate to a different point in the session tree. */
 	navigateTree(
@@ -1517,8 +1522,13 @@ export interface ExtensionCommandContextActions {
 	}) => Promise<{ cancelled: boolean }>;
 	fork: (
 		entryId: string,
-		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-	) => Promise<{ cancelled: boolean }>;
+		options?: {
+			position?: "before" | "at";
+			/** Optional externally coordinated session id, used by Hutao to align native and trace fork ids. */
+			sessionId?: string;
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+		},
+	) => Promise<{ cancelled: boolean; sessionFile?: string }>;
 	navigateTree: (
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
