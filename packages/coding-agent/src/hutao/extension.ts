@@ -1,4 +1,10 @@
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "../core/extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	InputEventResult,
+	ToolCallEvent,
+} from "../core/extensions/types.ts";
 import { isToolCallEventType } from "../core/extensions/types.ts";
 import {
 	actionCommand,
@@ -13,6 +19,7 @@ import {
 	sessionCommand,
 } from "./commands.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
@@ -55,7 +62,12 @@ async function createRecorder(
 	const registry = new SessionRegistry(repoRoot);
 	const nativeSessionId = ctx.sessionManager.getSessionId();
 	const repoLocalNativeSessionId = /^(sess|fs)_/.test(nativeSessionId) ? nativeSessionId : undefined;
-	const currentSessionId = repoLocalNativeSessionId ?? registry.readCurrentSessionId();
+	const registryCurrentSessionId = registry.readCurrentSessionId();
+	const registryCurrentSession = registryCurrentSessionId ? registry.readSession(registryCurrentSessionId) : undefined;
+	const currentSessionId =
+		registryCurrentSession?.kind === "forkSession" && registryCurrentSession.id !== repoLocalNativeSessionId
+			? registryCurrentSession.id
+			: (repoLocalNativeSessionId ?? registryCurrentSessionId);
 	if (
 		state.recorder &&
 		state.recorderRepoRoot === repoRoot &&
@@ -87,6 +99,19 @@ function isDangerousCommand(command: string): boolean {
 	return /\b(rm\s+-rf|sudo\b|chmod\s+-R|chown\s+-R|git\s+reset\s+--hard|git\s+clean\s+-fd|git\s+push\s+--force|curl\b.*\|\s*sh|wget\b.*\|\s*sh)\b/i.test(
 		command,
 	);
+}
+
+function isCommandCapableContext(ctx: ExtensionContext): ctx is ExtensionCommandContext {
+	return typeof (ctx as Partial<ExtensionCommandContext>).fork === "function";
+}
+
+function safeNotify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
+	try {
+		ctx.ui.notify(message, type);
+	} catch {
+		// The input interceptor may fork and stale the old context. Notifications must not
+		// change whether the original prompt is handled or blocked.
+	}
 }
 
 // Keep Hutao state scoped to one loaded extension instance. ResourceLoader can
@@ -125,6 +150,19 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 				"warning",
 			);
 		}
+	});
+
+	pi.on("input", async (event, ctx): Promise<InputEventResult | undefined> => {
+		const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
+		if (!repoRoot) return undefined;
+		if (!isCommandCapableContext(ctx)) return undefined;
+		const decision = await defaultHistoricalContinuationCoordinator.handleInput(repoRoot, event, ctx);
+		if (decision.action === "continue") return undefined;
+		if (decision.action === "handled") {
+			return { action: "handled" };
+		}
+		safeNotify(ctx, `Hutao continuation blocked\n${decision.reason}`, "warning");
+		return { action: "handled" };
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

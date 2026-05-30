@@ -1798,10 +1798,10 @@ npx vitest run packages/coding-agent/test/session-manager/file-operations.test.t
 
 ### 16.2.3 当前 Phase D 进度指针
 
-最新已推送实现 checkpoint：
+当前 Phase D 实现 checkpoint：
 
 ```text
-433cef3 feat: coordinate hutao and native forks
+Explicit fork coordination and armed historical continuation are implemented in the Hutao trace/runtime integration.
 ```
 
 当前已经可用：
@@ -1813,15 +1813,17 @@ npx vitest run packages/coding-agent/test/session-manager/file-operations.test.t
 4. fork_session event 写入 native_fork metadata，包含 created/degraded 状态和 native linkage。
 5. 缺少 native entry mapping 时进入 degraded mode，不伪装成完整 native fork。
 6. retry_prompting 保留旧 prompting，并在 native fork 成功后把原文预填到 fresh native context。
+7. 历史 prompting/edit 详情页会 arm transient continuation target，但不会 fork，也不会修改旧历史。
+8. input pipeline 在 prompt 持久化前使用 command-capable context，因此 Hutao 可以在普通 interactive message 被记录前先 fork。
+9. armed normal interactive input 由 HistoricalContinuationCoordinator 处理，并通过 fresh fork context 重新发送；slash command 与 extension-originated input 不会触发 auto-fork。
 ```
 
 Phase D 剩余重点：
 
 ```text
-1. 把 armed historical context 接入 interactive submit pipeline。
-2. 目标行为：选中历史 prompting/edit 后直接输入普通对话，Hutao 在持久化该 user message 前自动 fork。
-3. 自动 fork 路径必须复用 HutaoForkCoordinator，新输入只能写入 fs_<id>。
-4. 后续尽量增强 /edit --before 的 native 语义；当前 before/after 文件状态由 Hutao restore/replay 处理。
+1. 补充真实 TUI flow 的 armed continuation 端到端覆盖。
+2. 决定 degraded armed auto-fork 是否要提供显式恢复 UI；当前为了保护旧 native session，会阻止该 input 写回旧 session。
+3. 后续尽量增强 /edit --before 的 native 语义；当前 before/after 文件状态由 Hutao restore/replay 处理。
 ```
 
 该 checkpoint 已跑验证：

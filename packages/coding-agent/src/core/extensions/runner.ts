@@ -1042,7 +1042,10 @@ export class ExtensionRunner {
 		source: InputSource,
 		streamingBehavior?: "steer" | "followUp",
 	): Promise<InputEventResult> {
-		const ctx = this.createContext();
+		// Input handlers run before user prompt persistence. Use command-capable context so
+		// user-initiated input interceptors can safely create/switch sessions before the
+		// prompt is recorded (for example Hutao armed historical continuation).
+		const ctx = this.createCommandContext();
 		let currentText = text;
 		let currentImages = images;
 

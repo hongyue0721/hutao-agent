@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getRepoLocalSessionDir, SessionManager } from "../../src/core/session-manager.ts";
+import { MemoryArmedContinuationStore } from "../../src/hutao/continuation-store.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION } from "../../src/hutao/event-store.ts";
 import { HutaoForkCoordinator } from "../../src/hutao/fork-coordinator.ts";
 import { GitAdapter } from "../../src/hutao/git-adapter.ts";
+import { HistoricalContinuationCoordinator } from "../../src/hutao/historical-continuation-coordinator.ts";
 import { HutaoIgnore } from "../../src/hutao/hutao-ignore.ts";
 import { rebuildIndex } from "../../src/hutao/index-builder.ts";
 import { PathMapper } from "../../src/hutao/path-mapper.ts";
@@ -383,6 +385,88 @@ describe("HutaoForkCoordinator", () => {
 		expect(fork.id).toBe(result.sessionId);
 		expect((fork.native_fork as { status?: string }).status).toBe("created");
 		expect((fork.native_fork as { forked_session_id?: string }).forked_session_id).toBe(result.sessionId);
+	});
+});
+
+describe("HistoricalContinuationCoordinator", () => {
+	it("does not consume armed context for slash commands", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const store = new MemoryArmedContinuationStore();
+		const coordinator = new HistoricalContinuationCoordinator(store);
+		coordinator.arm({ repoRoot: repo, sourceType: "prompting", sourceId: "p_test", mode: "after" });
+
+		const decision = await coordinator.handleInput(
+			repo,
+			{ type: "input", text: "/session", source: "interactive" },
+			{} as any,
+		);
+
+		expect(decision.action).toBe("continue");
+		expect(store.peek(repo)?.sourceId).toBe("p_test");
+	});
+
+	it("auto-forks armed historical context before resending normal input", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir);
+		const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+			sessionId: nativeSession.getSessionId(),
+			sessionFile: nativeSession.getSessionFile(),
+			leafEntryId: nativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		await recorder.recordPrompting("historical task", repo);
+		const nativeEntryId = nativeSession.appendMessage({
+			role: "user",
+			content: "historical task",
+			timestamp: Date.now(),
+		});
+		await recorder.recordNativeEntryLink(nativeSession.getEntry(nativeEntryId)!);
+		const prompting = readTraceEvents(repo, nativeSession.getSessionId()).find(
+			(event) => event.type === "prompting",
+		)!;
+		const store = new MemoryArmedContinuationStore();
+		const coordinator = new HistoricalContinuationCoordinator(store);
+		coordinator.arm({
+			repoRoot: repo,
+			sourceType: "prompting",
+			sourceId: String(prompting.id),
+			mode: "after",
+		});
+		let capturedSessionId: string | undefined;
+		let resentText: string | undefined;
+
+		const decision = await coordinator.handleInput(
+			repo,
+			{ type: "input", text: "continue from history", source: "interactive" },
+			{
+				fork: async (entryId: string, options?: Record<string, any>) => {
+					expect(entryId).toBe(nativeEntryId);
+					capturedSessionId = options?.sessionId;
+					await options?.withSession?.({
+						ui: { notify: () => {} },
+						sendUserMessage: async (content: string) => {
+							resentText = content;
+						},
+					});
+					return {
+						cancelled: false,
+						sessionFile: join(repo, ".hutao", "sessions", capturedSessionId!, "native-session.jsonl"),
+					};
+				},
+			} as any,
+		);
+
+		expect(decision.action).toBe("handled");
+		expect(capturedSessionId).toMatch(/^fs_/);
+		expect(resentText).toBe("continue from history");
+		expect(store.peek(repo)).toBeUndefined();
+		const forkEvents = readTraceEvents(repo, capturedSessionId!);
+		const fork = forkEvents.find((event) => event.type === "fork_session")!;
+		expect(fork.id).toBe(capturedSessionId);
+		expect((fork.native_fork as { status?: string }).status).toBe("created");
 	});
 });
 

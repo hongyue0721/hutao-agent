@@ -215,10 +215,10 @@ npx vitest run packages/coding-agent/test/session-manager/file-operations.test.t
 
 ### Current project status — latest Phase D checkpoint
 
-Latest pushed implementation checkpoint:
+Current Phase D implementation checkpoint:
 
 ```text
-433cef3 feat: coordinate hutao and native forks
+Explicit fork coordination and armed historical continuation are implemented in the Hutao trace/runtime integration.
 ```
 
 What is now working:
@@ -230,15 +230,17 @@ What is now working:
 4. fork_session events include native_fork metadata with created/degraded status and native linkage.
 5. Missing native entry mapping is represented as degraded mode, not as a fake complete native fork.
 6. retry_prompting preserves old prompting and pre-fills original text in the fresh native context when native fork succeeds.
+7. Historical prompting/edit detail views arm a transient continuation target without forking or mutating old history.
+8. The input pipeline now uses a command-capable context before prompt persistence, so Hutao can fork before a normal interactive message is recorded.
+9. Armed normal interactive input is handled by HistoricalContinuationCoordinator and resent through the fresh fork context; slash commands and extension-originated inputs do not auto-fork.
 ```
 
 Important remaining Phase D work:
 
 ```text
-1. Wire armed historical context into the interactive submit pipeline.
-2. Desired behavior: select historical prompting/edit, type normal chat, auto-fork before that user message is persisted.
-3. Ensure the auto-fork path reuses HutaoForkCoordinator and writes the new input only to fs_<id>.
-4. Improve native semantics for /edit --before where possible; current worktree before/after is handled by Hutao restore/replay.
+1. Broaden end-to-end interactive coverage for armed continuation in the real TUI flow.
+2. Decide whether degraded armed auto-fork should offer an explicit recovery UI instead of blocking the input to protect old native sessions.
+3. Improve native semantics for /edit --before where possible; current worktree before/after is handled by Hutao restore/replay.
 ```
 
 Last validation run for the checkpoint:

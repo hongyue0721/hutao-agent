@@ -5,6 +5,7 @@ import { CommitLinker } from "./commit-linker.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
 import { MergeManager, type MergeMode } from "./merge-manager.ts";
@@ -268,6 +269,7 @@ async function runCoordinatedFork(
 			"warning",
 		);
 	}
+	if (result.ok) defaultHistoricalContinuationCoordinator.clear(repoRoot);
 	return result;
 }
 
@@ -497,7 +499,18 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 	);
 	pushEventList(lines, "Edits", edits, (edit) => `${shortId(edit.id)} ${stringArray(edit.files).join(",")}`);
 	lines.push("actions: /fork prompting <id> --before | --retry | --after, /edit --prompting <id>, /git <commit>");
-	notify(ctx, `Prompting ${prompting.id}`, lines);
+	defaultHistoricalContinuationCoordinator.arm({
+		repoRoot,
+		sourceType: "prompting",
+		sourceId: String(prompting.id),
+		mode: "after",
+		title: firstLine(prompting.text),
+	});
+	notify(ctx, `Prompting ${prompting.id}`, [
+		...lines,
+		"",
+		"armed: next normal chat input will auto-fork after this prompting before it is recorded.",
+	]);
 }
 
 export async function runCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -614,7 +627,7 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 	const commits = relatedCommits(events, edit.id, "edit_ids");
 	const merges = relatedMerges(events, edit.id);
 	const revertedBy = events.filter((event) => event.type === "edit_reverted" && event.edit_id === edit.id);
-	notify(ctx, `Edit ${edit.id}`, [
+	const lines = [
 		`summary: ${edit.summary ?? ""}`,
 		`session: ${edit.session_id}`,
 		`parent prompting: ${edit.parent_prompting}`,
@@ -630,7 +643,17 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		"actions: /prompting <parent>, /fork edit <id> --before|--after, /edit revert <id>",
 		"",
 		patchPreview,
-	]);
+		"",
+		"armed: next normal chat input will auto-fork after this edit before it is recorded.",
+	];
+	defaultHistoricalContinuationCoordinator.arm({
+		repoRoot,
+		sourceType: "edit",
+		sourceId: String(edit.id),
+		mode: "after",
+		title: firstLine(edit.summary ?? stringArray(edit.files).join(", ")),
+	});
+	notify(ctx, `Edit ${edit.id}`, lines);
 }
 
 export async function gitCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
