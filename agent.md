@@ -233,14 +233,16 @@ What is now working:
 7. Historical prompting/edit detail views arm a transient continuation target without forking or mutating old history.
 8. The input pipeline now uses a command-capable context before prompt persistence, so Hutao can fork before a normal interactive message is recorded.
 9. Armed normal interactive input is handled by HistoricalContinuationCoordinator and resent through the fresh fork context; slash commands and extension-originated inputs do not auto-fork.
+10. If armed continuation is blocked, Hutao restores the original input to the editor instead of letting it write into old history.
+11. /edit --before native targeting prefers the parent prompting's user entry, giving a better pre-edit native branch point.
+12. Merge and revert commands append native custom trace entries while keeping .hutao events as the source of truth.
 ```
 
-Important remaining Phase D work:
+Remaining follow-up work:
 
 ```text
-1. Broaden end-to-end interactive coverage for armed continuation in the real TUI flow.
-2. Decide whether degraded armed auto-fork should offer an explicit recovery UI instead of blocking the input to protect old native sessions.
-3. Improve native semantics for /edit --before where possible; current worktree before/after is handled by Hutao restore/replay.
+1. Add broader real-terminal/manual smoke coverage as Hutao's TUI test harness matures.
+2. Continue improving conflict-specific recovery UX for degraded native mappings and /edit --before restore/replay edge cases.
 ```
 
 Last validation run for the checkpoint:

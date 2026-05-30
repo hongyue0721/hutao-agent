@@ -114,6 +114,15 @@ function safeNotify(ctx: ExtensionContext, message: string, type: "info" | "warn
 	}
 }
 
+function safeRestoreEditorText(ctx: ExtensionContext, text: string): void {
+	try {
+		if (!ctx.ui.getEditorText().trim()) ctx.ui.setEditorText(text);
+	} catch {
+		// Best-effort recovery only; returning handled is still safer than writing the
+		// prompt into the historical session after a failed continuation.
+	}
+}
+
 // Keep Hutao state scoped to one loaded extension instance. ResourceLoader can
 // rebuild runtimes during reload/resume/fork, and process-global dedupe would
 // silently skip handler registration for the real runtime. If built-in extension
@@ -161,7 +170,12 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 		if (decision.action === "handled") {
 			return { action: "handled" };
 		}
-		safeNotify(ctx, `Hutao continuation blocked\n${decision.reason}`, "warning");
+		safeRestoreEditorText(ctx, event.text);
+		safeNotify(
+			ctx,
+			`Hutao continuation blocked\n${decision.reason}\n\nYour input was restored to the editor.`,
+			"warning",
+		);
 		return { action: "handled" };
 	});
 

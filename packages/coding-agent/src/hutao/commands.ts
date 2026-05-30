@@ -32,6 +32,15 @@ function notify(
 	ctx.ui.notify(`${title}\n${lines.join("\n")}`, type);
 }
 
+function appendNativeTraceEntry(ctx: ExtensionCommandContext, customType: string, data: Record<string, unknown>): void {
+	try {
+		ctx.appendEntry(customType, data);
+	} catch {
+		// Native custom entries are UI/linkage helpers. Hutao canonical .hutao events remain
+		// the source of truth and command success must not depend on native append support.
+	}
+}
+
 function findEvent(events: HutaoEvent[], idPrefix: string, type?: string): HutaoEvent | undefined {
 	return events.find((event) => (!type || event.type === type) && String(event.id).startsWith(idPrefix));
 }
@@ -582,6 +591,13 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		const confirmed = await previewRevertEdit(editId, repoRoot, ctx);
 		if (!confirmed) return notify(ctx, "Hutao edit", ["Revert cancelled."]);
 		const result = await new RevertManager(repoRoot).revertEdit(editId, targetSession);
+		appendNativeTraceEntry(ctx, "hutao_revert", {
+			edit_id: editId,
+			target_session: targetSession,
+			status: result.ok ? "completed" : "failed",
+			revert_edit_id: result.revertEditId,
+			reason: result.reason,
+		});
 		if (!result.ok) return notify(ctx, "Hutao edit", [result.reason ?? "Revert failed."], "warning");
 		notify(ctx, "Hutao edit", [`Reverted edit ${editId} as ${result.revertEditId}`]);
 		return;
@@ -840,6 +856,13 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		);
 		if (!confirmed) return notify(ctx, "Hutao merge", ["Skip cancelled."]);
 		const result = await new MergeManager(repoRoot).skipLastConflict(sourceIdPrefix);
+		appendNativeTraceEntry(ctx, "hutao_merge", {
+			source_session: sourceIdPrefix,
+			mode: "skip",
+			status: result.ok ? "completed" : "failed",
+			skipped_edits: result.skippedEdits,
+			message: result.message,
+		});
 		return notify(
 			ctx,
 			"Hutao merge",
@@ -857,6 +880,14 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		);
 		if (!confirmed) return notify(ctx, "Hutao merge", ["Resolution capture cancelled."]);
 		const result = await new MergeManager(repoRoot).captureResolutionEdit(target, source.id);
+		appendNativeTraceEntry(ctx, "hutao_merge", {
+			source_session: source.id,
+			target_session: target,
+			mode: "capture_resolution",
+			status: result.ok ? "completed" : "failed",
+			resolution_edits: result.resolutionEdits,
+			message: result.message,
+		});
 		return notify(
 			ctx,
 			"Hutao merge",
@@ -874,6 +905,17 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 					? "apply_tree"
 					: "preview";
 	const result = await new MergeManager(repoRoot).mergeSession(sourceIdPrefix, mode);
+	appendNativeTraceEntry(ctx, "hutao_merge", {
+		source_session: sourceIdPrefix,
+		mode,
+		status: result.ok ? "completed" : result.conflictEdits.length ? "conflict" : "failed",
+		message: result.message,
+		changed_files: result.changedFiles,
+		applied_edits: result.appliedEdits,
+		skipped_edits: result.skippedEdits,
+		conflict_edits: result.conflictEdits,
+		resolution_edits: result.resolutionEdits,
+	});
 	const lines = [
 		result.message,
 		`mode: ${result.mode}`,

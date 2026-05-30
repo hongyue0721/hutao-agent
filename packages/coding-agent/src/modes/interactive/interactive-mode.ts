@@ -1659,6 +1659,9 @@ export class InteractiveMode {
 				})();
 			},
 			getSystemPrompt: () => this.session.systemPrompt,
+			appendEntry: (customType, data) => {
+				this.session.sessionManager.appendCustomEntry(customType, data);
+			},
 		});
 
 		// Set up the extension shortcut handler on the default editor

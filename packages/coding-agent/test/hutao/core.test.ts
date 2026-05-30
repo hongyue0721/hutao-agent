@@ -6,6 +6,7 @@ import { getRepoLocalSessionDir, SessionManager } from "../../src/core/session-m
 import { MemoryArmedContinuationStore } from "../../src/hutao/continuation-store.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION } from "../../src/hutao/event-store.ts";
 import { HutaoForkCoordinator } from "../../src/hutao/fork-coordinator.ts";
+import { ForkTargetResolver } from "../../src/hutao/fork-target-resolver.ts";
 import { GitAdapter } from "../../src/hutao/git-adapter.ts";
 import { HistoricalContinuationCoordinator } from "../../src/hutao/historical-continuation-coordinator.ts";
 import { HutaoIgnore } from "../../src/hutao/hutao-ignore.ts";
@@ -385,6 +386,59 @@ describe("HutaoForkCoordinator", () => {
 		expect(fork.id).toBe(result.sessionId);
 		expect((fork.native_fork as { status?: string }).status).toBe("created");
 		expect((fork.native_fork as { forked_session_id?: string }).forked_session_id).toBe(result.sessionId);
+	});
+});
+
+describe("ForkTargetResolver", () => {
+	it("anchors edit before continuations at the parent prompting user entry", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const metadata = await new SessionRegistry(repo).createSessionMetadata("sess_resolve");
+		const store = new EventStore(repo, "sess_resolve");
+		store.init(metadata);
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "prompting",
+			id: "p_parent",
+			session_id: "sess_resolve",
+			text: "change file",
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "native_entry_link",
+			id: "nel_prompt",
+			session_id: "sess_resolve",
+			related_prompting: "p_parent",
+			native_entry_id: "entry_user",
+			native_entry_type: "message",
+			native_message_role: "user",
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "native_entry_link",
+			id: "nel_edit",
+			session_id: "sess_resolve",
+			related_edit: "e_child",
+			native_entry_id: "entry_after_edit",
+			native_entry_type: "custom",
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "edit",
+			id: "e_child",
+			session_id: "sess_resolve",
+			parent_prompting: "p_parent",
+		});
+
+		const result = new ForkTargetResolver(repo).resolve({
+			sourceType: "edit",
+			sourceIdPrefix: "e_child",
+			mode: "before",
+		});
+
+		expect(result.ok).toBe(true);
+		expect(result.targetNativeEntryId).toBe("entry_user");
+		expect(result.nativeForkPosition).toBe("at");
 	});
 });
 

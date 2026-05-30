@@ -66,11 +66,28 @@ function findPromptingNativeTarget(
 	return { degradedReason: `No native entry mapping found for prompting ${source.id}.` };
 }
 
+function findPromptingUserLink(events: HutaoEvent[], promptingId: string): HutaoEvent | undefined {
+	return events.find(
+		(event) =>
+			event.type === "native_entry_link" &&
+			event.related_prompting === promptingId &&
+			event.native_entry_type === "message" &&
+			event.native_message_role === "user" &&
+			stringValue(event.native_entry_id),
+	);
+}
+
 function findEditNativeTarget(
 	events: HutaoEvent[],
 	source: HutaoEvent,
 	mode: ForkMode,
 ): Pick<ForkTargetResolution, "targetNativeEntryId" | "nativeForkPosition" | "degradedReason"> {
+	const parentPrompting = stringValue(source.parent_prompting);
+	if (mode === "before" && parentPrompting) {
+		const promptingUserLink = findPromptingUserLink(events, parentPrompting);
+		const promptingUserEntryId = stringValue(promptingUserLink?.native_entry_id);
+		if (promptingUserEntryId) return { targetNativeEntryId: promptingUserEntryId, nativeForkPosition: "at" };
+	}
 	const editLinks = events.filter((event) =>
 		nativeEntryLinkMatchesSource(event, source, { sourceType: "edit", sourceIdPrefix: String(source.id), mode }),
 	);

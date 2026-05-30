@@ -260,6 +260,40 @@ describe("AgentSession model and extension characterization", () => {
 		expect(extensionApi).toBeDefined();
 	});
 
+	it("provides command-capable context to input handlers before prompt persistence", async () => {
+		let sawFork = false;
+		let providerUserText = "";
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("input", async (_event, ctx) => {
+						sawFork = typeof (ctx as { fork?: unknown }).fork === "function";
+						return { action: "continue" };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			(context) => {
+				const user = context.messages.find((message) => message.role === "user");
+				providerUserText =
+					user && typeof user.content !== "string"
+						? user.content
+								.filter((part): part is { type: "text"; text: string } => part.type === "text")
+								.map((part) => part.text)
+								.join("\n")
+						: "";
+				return fauxAssistantMessage("done");
+			},
+		]);
+
+		await harness.session.prompt("needs preflight fork capability");
+
+		expect(sawFork).toBe(true);
+		expect(providerUserText).toBe("needs preflight fork capability");
+	});
+
 	it("allows before_agent_start handlers to inject custom messages and modify the system prompt", async () => {
 		const harness = await createHarness({
 			extensionFactories: [

@@ -324,6 +324,8 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Append a custom entry to the session for state persistence (not sent to LLM). */
+	appendEntry<T = unknown>(customType: string, data?: T): void;
 }
 
 /**

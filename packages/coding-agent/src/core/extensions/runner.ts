@@ -630,6 +630,10 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return runner.getSystemPromptFn();
 			},
+			appendEntry: (customType, data) => {
+				runner.assertActive();
+				runner.runtime.appendEntry(customType, data);
+			},
 		};
 	}
 
