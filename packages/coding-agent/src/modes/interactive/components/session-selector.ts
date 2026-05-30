@@ -53,6 +53,10 @@ function canonicalizePath(path: string | undefined): string | undefined {
 	return _canonicalizePath(path);
 }
 
+function formatSessionSourceLabel(session: SessionInfo): string {
+	return session.source === "repo-local" ? "[repo] " : "[global] ";
+}
+
 class SessionSelectorHeader implements Component {
 	private scope: SessionScope;
 	private sortMode: SortMode;
@@ -446,6 +450,7 @@ class SessionList implements Component, Focusable {
 			const hasName = !!session.name;
 			const displayText = session.name ?? session.firstMessage;
 			const normalizedMessage = displayText.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+			const sourceLabel = formatSessionSourceLabel(session);
 
 			// Right side: message count and age
 			const age = formatSessionDate(session.modified);
@@ -463,8 +468,9 @@ class SessionList implements Component, Focusable {
 
 			// Calculate available width for message
 			const prefixWidth = visibleWidth(prefix);
+			const sourceLabelWidth = visibleWidth(sourceLabel);
 			const rightWidth = visibleWidth(rightPart) + 2; // +2 for spacing
-			const availableForMsg = width - 2 - prefixWidth - rightWidth; // -2 for cursor
+			const availableForMsg = width - 2 - prefixWidth - sourceLabelWidth - rightWidth; // -2 for cursor
 
 			const truncatedMsg = truncateToWidth(normalizedMessage, Math.max(10, availableForMsg), "…");
 
@@ -483,7 +489,8 @@ class SessionList implements Component, Focusable {
 			}
 
 			// Build line
-			const leftPart = cursor + theme.fg("dim", prefix) + styledMsg;
+			const styledSource = theme.fg(session.source === "repo-local" ? "accent" : "dim", sourceLabel);
+			const leftPart = cursor + theme.fg("dim", prefix) + styledSource + styledMsg;
 			const leftWidth = visibleWidth(leftPart);
 			const spacing = Math.max(1, width - leftWidth - visibleWidth(rightPart));
 			const styledRight = theme.fg(isConfirmingDelete ? "error" : "dim", rightPart);

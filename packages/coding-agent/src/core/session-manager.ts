@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { basename, dirname, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, sep } from "node:path";
 import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
@@ -174,11 +174,15 @@ export interface SessionContext {
 	model: { provider: string; modelId: string } | null;
 }
 
+export type SessionSource = "repo-local" | "global";
+
 export interface SessionInfo {
 	path: string;
 	id: string;
 	/** Working directory where the session was started. Empty string for old sessions. */
 	cwd: string;
+	/** Storage source for resume/session picker display. */
+	source: SessionSource;
 	/** User-defined display name from session_info entries. */
 	name?: string;
 	/** Path to the parent session (if this session was forked). */
@@ -249,6 +253,25 @@ function isRepoLocalNativeSessionFile(filePath: string): boolean {
 
 function getRepoLocalNativeSessionFile(sessionDir: string, sessionId: string): string {
 	return join(sessionDir, sessionId, HUTAO_NATIVE_SESSION_FILE);
+}
+
+function getRepoLocalRootForNativeSessionFile(filePath: string): string | undefined {
+	const normalized = normalizePath(filePath);
+	if (!isRepoLocalNativeSessionFile(normalized)) return undefined;
+	const sessionsDir = dirname(dirname(normalized));
+	if (!isRepoLocalSessionsDir(sessionsDir)) return undefined;
+	return resolvePath(dirname(dirname(sessionsDir)));
+}
+
+function getSessionSource(filePath: string): SessionSource {
+	return getRepoLocalRootForNativeSessionFile(filePath) ? "repo-local" : "global";
+}
+
+function resolveSessionParentPathForInfo(filePath: string, parentSessionPath: string | undefined): string | undefined {
+	if (!parentSessionPath) return undefined;
+	const repoRoot = getRepoLocalRootForNativeSessionFile(filePath);
+	if (!repoRoot || isAbsolute(parentSessionPath)) return parentSessionPath;
+	return resolvePath(join(repoRoot, parentSessionPath));
 }
 
 function getSessionHeaderCwdForRuntime(header: SessionHeader, fallbackCwd: string): string {
@@ -791,13 +814,14 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 		}
 
 		const cwd = typeof (header as SessionHeader).cwd === "string" ? (header as SessionHeader).cwd : "";
-		const parentSessionPath = (header as SessionHeader).parentSession;
+		const parentSessionPath = resolveSessionParentPathForInfo(filePath, (header as SessionHeader).parentSession);
 
 		const modified = getSessionModifiedDate(entries, header as SessionHeader, stats.mtime);
 
 		return {
 			path: filePath,
 			id: (header as SessionHeader).id,
+			source: getSessionSource(filePath),
 			cwd,
 			name,
 			parentSessionPath,

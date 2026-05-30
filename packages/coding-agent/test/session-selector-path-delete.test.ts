@@ -38,6 +38,7 @@ function makeSession(overrides: Partial<SessionInfo> & { id: string }): SessionI
 	return {
 		path: overrides.path ?? `/tmp/${overrides.id}.jsonl`,
 		id: overrides.id,
+		source: overrides.source ?? "global",
 		cwd: overrides.cwd ?? "",
 		name: overrides.name,
 		parentSessionPath: overrides.parentSessionPath,
@@ -67,8 +68,9 @@ function createSymlinkedSessionPaths(): {
 	mkdirSync(sharedDir, { recursive: true });
 	const aliasASessions = join(aliasADir, "sessions");
 	const aliasBSessions = join(aliasBDir, "sessions");
-	symlinkSync(sharedDir, aliasASessions);
-	symlinkSync(sharedDir, aliasBSessions);
+	const linkType = process.platform === "win32" ? "junction" : "dir";
+	symlinkSync(sharedDir, aliasASessions, linkType);
+	symlinkSync(sharedDir, aliasBSessions, linkType);
 
 	const parentRealPath = join(sharedDir, "parent.jsonl");
 	const childRealPath = join(sharedDir, "child.jsonl");
@@ -279,7 +281,7 @@ describe("session selector path/delete interactions", () => {
 
 		const output = stripAnsi(selector.render(120).join("\n"));
 		expect(output).toContain("Parent");
-		expect(output).toContain("└─ Child");
+		expect(output).toContain("└─ [global] Child");
 	});
 
 	it("treats the current session as active across symlink aliases", async () => {

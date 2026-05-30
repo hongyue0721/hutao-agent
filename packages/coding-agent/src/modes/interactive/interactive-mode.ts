@@ -537,34 +537,58 @@ export class InteractiveMode {
 		}
 	}
 
+	private showRepoLocalSessionStartupNoticeIfNeeded(): void {
+		void (async () => {
+			try {
+				const sessions = await SessionManager.listForResume(
+					this.sessionManager.getCwd(),
+					this.sessionManager.getSessionDir(),
+				);
+				const currentFile = this.sessionManager.getSessionFile();
+				const currentPath = currentFile ? path.resolve(currentFile) : undefined;
+				const repoLocalSessions = sessions.filter(
+					(session) =>
+						session.source === "repo-local" && (!currentPath || path.resolve(session.path) !== currentPath),
+				);
+				if (repoLocalSessions.length === 0) return;
+				const suffix = repoLocalSessions.length === 1 ? "" : "s";
+				this.showStatus(
+					`Found ${repoLocalSessions.length} repo-local Hutao session${suffix}. Use /resume or /session to continue.`,
+				);
+			} catch {
+				// Startup notices should never block interactive mode.
+			}
+		})();
+	}
+
 	private showStartupNoticesIfNeeded(): void {
 		if (this.startupNoticesShown) {
 			return;
 		}
 		this.startupNoticesShown = true;
 
-		if (!this.changelogMarkdown) {
-			return;
+		if (this.changelogMarkdown) {
+			if (this.chatContainer.children.length > 0) {
+				this.chatContainer.addChild(new Spacer(1));
+			}
+			this.chatContainer.addChild(new DynamicBorder());
+			if (this.settingsManager.getCollapseChangelog()) {
+				const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
+				const latestVersion = versionMatch ? versionMatch[1] : this.version;
+				const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
+				this.chatContainer.addChild(new Text(condensedText, 1, 0));
+			} else {
+				this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(
+					new Markdown(this.changelogMarkdown.trim(), 1, 0, this.getMarkdownThemeWithSettings()),
+				);
+				this.chatContainer.addChild(new Spacer(1));
+			}
+			this.chatContainer.addChild(new DynamicBorder());
 		}
 
-		if (this.chatContainer.children.length > 0) {
-			this.chatContainer.addChild(new Spacer(1));
-		}
-		this.chatContainer.addChild(new DynamicBorder());
-		if (this.settingsManager.getCollapseChangelog()) {
-			const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
-			const latestVersion = versionMatch ? versionMatch[1] : this.version;
-			const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
-			this.chatContainer.addChild(new Text(condensedText, 1, 0));
-		} else {
-			this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(
-				new Markdown(this.changelogMarkdown.trim(), 1, 0, this.getMarkdownThemeWithSettings()),
-			);
-			this.chatContainer.addChild(new Spacer(1));
-		}
-		this.chatContainer.addChild(new DynamicBorder());
+		this.showRepoLocalSessionStartupNoticeIfNeeded();
 	}
 
 	async init(): Promise<void> {

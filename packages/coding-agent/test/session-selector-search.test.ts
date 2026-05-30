@@ -8,6 +8,7 @@ function makeSession(
 	return {
 		path: `/tmp/${overrides.id}.jsonl`,
 		id: overrides.id,
+		source: overrides.source ?? "global",
 		cwd: overrides.cwd ?? "",
 		name: overrides.name,
 		created: overrides.created ?? new Date(0),

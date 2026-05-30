@@ -285,6 +285,9 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 
 		const listed = await SessionManager.list(repo, sessionDir);
 		expect(new Set(listed.map((entry) => entry.path))).toEqual(new Set([originalFile, forkedFile]));
+		const forkInfo = listed.find((entry) => entry.path === forkedFile);
+		expect(forkInfo?.source).toBe("repo-local");
+		expect(forkInfo?.parentSessionPath).toBe(originalFile);
 		expect(findMostRecentSession(sessionDir, repo)).toBe(forkedFile);
 	});
 
@@ -330,6 +333,8 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(new Set(listed.map((entry) => entry.path))).toEqual(
 			new Set([repoLocal.getSessionFile(), legacy.getSessionFile()]),
 		);
+		expect(listed.find((entry) => entry.path === repoLocal.getSessionFile())?.source).toBe("repo-local");
+		expect(listed.find((entry) => entry.path === legacy.getSessionFile())?.source).toBe("global");
 		expect(SessionManager.create(repo, sessionDir).getSessionFile()).toContain(`${join(".hutao", "sessions")}`);
 	});
 });
