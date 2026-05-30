@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ToolResultEvent } from "../core/extensions/types.ts";
+import type { SessionEntry } from "../core/session-manager.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoSessionMetadata } from "./event-store.ts";
 import { GitAdapter, type WorktreeSnapshot } from "./git-adapter.ts";
 import { createHutaoId } from "./ids.ts";
@@ -60,6 +61,21 @@ function uniqueStrings(values: unknown[]): string[] {
 	return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
 }
 
+function getNativeMessageRole(entry: SessionEntry): string | undefined {
+	return entry.type === "message" ? String(entry.message.role) : undefined;
+}
+
+function getNativeToolCallId(entry: SessionEntry): string | undefined {
+	if (entry.type !== "message") return undefined;
+	const message = entry.message as { toolCallId?: unknown };
+	return typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+}
+
+function getNativeCustomType(entry: SessionEntry): string | undefined {
+	if (entry.type !== "custom" && entry.type !== "custom_message") return undefined;
+	return entry.customType;
+}
+
 export class TraceRecorder {
 	private repoRoot: string;
 	private sessionId: string;
@@ -69,6 +85,7 @@ export class TraceRecorder {
 	private paths: PathMapper;
 	private activePromptingId?: string;
 	private runs: Map<string, RunState>;
+	private toolCallRunIds: Map<string, string>;
 	private nativeContextProvider?: NativeTraceContextProvider;
 
 	constructor(
@@ -84,6 +101,7 @@ export class TraceRecorder {
 		this.git = new GitAdapter(repoRoot);
 		this.paths = new PathMapper(repoRoot);
 		this.runs = new Map();
+		this.toolCallRunIds = new Map();
 		this.nativeContextProvider = nativeContextProvider;
 	}
 
@@ -100,6 +118,29 @@ export class TraceRecorder {
 			native_anchor_entry_id: native.leafEntryId ?? null,
 			native_anchor_relation: "current_leaf_at_trace_event",
 		};
+	}
+
+	async recordNativeEntryLink(entry: SessionEntry): Promise<void> {
+		const native = this.nativeContextProvider?.();
+		if (!native) return;
+		const toolCallId = getNativeToolCallId(entry);
+		this.store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "native_entry_link",
+			id: createHutaoId("nel"),
+			session_id: this.sessionId,
+			related_prompting: this.activePromptingId,
+			related_run: toolCallId ? this.toolCallRunIds.get(toolCallId) : undefined,
+			tool_call_id: toolCallId,
+			native_session_id: native.sessionId,
+			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
+			native_entry_id: entry.id,
+			native_parent_entry_id: entry.parentId,
+			native_entry_type: entry.type,
+			native_message_role: getNativeMessageRole(entry),
+			native_custom_type: getNativeCustomType(entry),
+			created_at: new Date().toISOString(),
+		});
 	}
 
 	async init(): Promise<void> {
@@ -180,6 +221,7 @@ export class TraceRecorder {
 			startedAt: new Date().toISOString(),
 		};
 		this.runs.set(toolCallId, run);
+		this.toolCallRunIds.set(toolCallId, id);
 		this.store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "run_started",

@@ -30,7 +30,7 @@ function encodeRandomBytes(bytes: Buffer): string {
 	return encoded.padEnd(16, "0").slice(0, 16);
 }
 
-export type HutaoIdPrefix = "sess" | "fs" | "p" | "r" | "e" | "m" | "cl" | "er";
+export type HutaoIdPrefix = "sess" | "fs" | "p" | "r" | "e" | "m" | "cl" | "er" | "nel";
 
 export function createUlid(): string {
 	return `${encodeTimestamp(Date.now())}${encodeRandomBytes(randomBytes(10))}`;

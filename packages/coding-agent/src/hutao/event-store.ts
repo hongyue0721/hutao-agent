@@ -11,7 +11,8 @@ export type HutaoEventType =
 	| "fork_session"
 	| "merge"
 	| "commit_link"
-	| "edit_reverted";
+	| "edit_reverted"
+	| "native_entry_link";
 
 export interface HutaoEventBase {
 	schema_version: string;

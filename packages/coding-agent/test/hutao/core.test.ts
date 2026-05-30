@@ -185,6 +185,35 @@ describe("TraceRecorder", () => {
 		}
 	});
 
+	it("records precise native entry link events without mutating existing trace events", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir);
+		const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+			sessionId: nativeSession.getSessionId(),
+			sessionFile: nativeSession.getSessionFile(),
+			leafEntryId: nativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		await recorder.recordPrompting("link native", repo);
+		const nativeEntryId = nativeSession.appendMessage({
+			role: "user",
+			content: "link native",
+			timestamp: Date.now(),
+		});
+		await recorder.recordNativeEntryLink(nativeSession.getEntry(nativeEntryId)!);
+
+		const events = readTraceEvents(repo, nativeSession.getSessionId());
+		const link = events.find((event) => event.type === "native_entry_link");
+		expect(link?.native_session_id).toBe(nativeSession.getSessionId());
+		expect(link?.native_session_file).toBe(`.hutao/sessions/${nativeSession.getSessionId()}/native-session.jsonl`);
+		expect(link?.native_entry_id).toBe(nativeEntryId);
+		expect(link?.native_entry_type).toBe("message");
+		expect(link?.native_message_role).toBe("user");
+		expect(link?.related_prompting).toBe(events.find((event) => event.type === "prompting")?.id);
+	});
+
 	it("links commits observed from bash runs", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);

@@ -155,6 +155,8 @@ export type SessionEntry =
 	| LabelEntry
 	| SessionInfoEntry;
 
+export type SessionAppendListener = (entry: SessionEntry) => void;
+
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
 
@@ -209,6 +211,7 @@ export type ReadonlySessionManager = Pick<
 	| "getEntries"
 	| "getTree"
 	| "getSessionName"
+	| "onAppendEntry"
 >;
 
 function createSessionId(): string {
@@ -934,6 +937,7 @@ export class SessionManager {
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
+	private appendListeners: Set<SessionAppendListener> = new Set();
 	private leafId: string | null = null;
 
 	private constructor(
@@ -1123,6 +1127,20 @@ export class SessionManager {
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
 		this._persist(entry);
+		for (const listener of this.appendListeners) {
+			try {
+				listener(entry);
+			} catch {
+				// Append listeners are observers and must not break session persistence.
+			}
+		}
+	}
+
+	onAppendEntry(listener: SessionAppendListener): () => void {
+		this.appendListeners.add(listener);
+		return () => {
+			this.appendListeners.delete(listener);
+		};
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.

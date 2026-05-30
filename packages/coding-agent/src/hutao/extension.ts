@@ -22,6 +22,8 @@ type HutaoTraceExtensionState = {
 	recorder?: TraceRecorder;
 	recorderRepoRoot?: string;
 	startupNoticeRepos: Set<string>;
+	nativeEntryLinkUnsubscribe?: () => void;
+	nativeEntryLinkSessionKey?: string;
 };
 
 function createNativeContextProvider(ctx: ExtensionContext) {
@@ -29,6 +31,18 @@ function createNativeContextProvider(ctx: ExtensionContext) {
 		sessionId: ctx.sessionManager.getSessionId(),
 		sessionFile: ctx.sessionManager.getSessionFile(),
 		leafEntryId: ctx.sessionManager.getLeafId(),
+	});
+}
+
+function ensureNativeEntryLinkListener(ctx: ExtensionContext, state: HutaoTraceExtensionState): void {
+	const sessionKey = ctx.sessionManager.getSessionFile() ?? ctx.sessionManager.getSessionId();
+	if (state.nativeEntryLinkSessionKey === sessionKey) return;
+	state.nativeEntryLinkUnsubscribe?.();
+	state.nativeEntryLinkSessionKey = sessionKey;
+	state.nativeEntryLinkUnsubscribe = ctx.sessionManager.onAppendEntry((entry) => {
+		void state.recorder?.recordNativeEntryLink(entry).catch(() => {
+			// Native entry links are best-effort trace metadata and must not affect session persistence.
+		});
 	});
 }
 
@@ -48,12 +62,14 @@ async function createRecorder(
 		(!currentSessionId || state.recorder.getSessionId() === currentSessionId)
 	) {
 		state.recorder.setNativeContextProvider(createNativeContextProvider(ctx));
+		ensureNativeEntryLinkListener(ctx, state);
 		return state.recorder;
 	}
 	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
 	state.recorderRepoRoot = repoRoot;
 	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId, createNativeContextProvider(ctx));
 	await state.recorder.init();
+	ensureNativeEntryLinkListener(ctx, state);
 	return state.recorder;
 }
 

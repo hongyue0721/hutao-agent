@@ -212,6 +212,43 @@ describe("SessionManager custom flat session directory", () => {
 	});
 });
 
+describe("SessionManager append listeners", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `session-test-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("notifies append listeners after entries are persisted", () => {
+		const sm = SessionManager.create(tempDir);
+		const seen: string[] = [];
+		const unsubscribe = sm.onAppendEntry((entry) => {
+			seen.push(entry.id);
+		});
+		const first = sm.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		unsubscribe();
+		const second = sm.appendMessage({ role: "user", content: "ignored", timestamp: Date.now() });
+
+		expect(seen).toEqual([first]);
+		expect(sm.getEntry(first)?.id).toBe(first);
+		expect(sm.getEntry(second)?.id).toBe(second);
+	});
+
+	it("handles append listener errors without breaking persistence", () => {
+		const sm = SessionManager.create(tempDir);
+		sm.onAppendEntry(() => {
+			throw new Error("listener failed");
+		});
+		const entryId = sm.appendMessage({ role: "user", content: "still persisted", timestamp: Date.now() });
+		expect(sm.getEntry(entryId)?.id).toBe(entryId);
+	});
+});
+
 describe("SessionManager repo-local Hutao native session directory", () => {
 	let tempDir: string;
 	let repo: string;
