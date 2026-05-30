@@ -1197,6 +1197,174 @@ Incomplete Hutao history / raw evidence only
 
 后续优化可以通过 doctor 检测这种状态，但不要编造不存在的 assistant/user 对话。
 
+### 14.5 当前 repo-local native resume 状态与下一阶段路线
+
+本节记录当前阶段的真实完成度和后续执行顺序，防止后续 agent 误以为 repo-local native resume 已经完整完成。
+
+当前状态可以概括为：
+
+```text
+repo-local native session store 底座：已完成第一版
+resume/session picker 接入：已完成第一版
+完整 clone 后聊天级 resume / prompting-edit fork：尚未完成
+```
+
+#### 14.5.1 已完成的架构地基
+
+截至当前实现，以下能力已经落地，后续修改不得回退：
+
+```text
+1. 在 Git repo 内创建 native session 时，优先写入 .hutao/sessions/<id>/native-session.jsonl。
+2. repo-local native session 使用 sess_<id> 作为普通 session id。
+3. repo-local native fork 使用 fs_<id> 作为 fork/branched session id。
+4. repo-local native session header 的 cwd 必须保存为 "."，不能保存机器绝对路径。
+5. repo-local native session 落盘时必须把 repo root 绝对路径替换成 ${REPO}。
+6. 打开 repo-local native session 时，${REPO} 必须 hydrate 为当前 clone 的 repo root。
+7. SessionManager.listForResume 必须合并当前 repo 的 repo-local sessions 和兼容的 legacy/global sessions。
+8. 启动 --resume 与交互式 /resume 必须走 repo-local-aware listing。
+9. repo-local native session 与 Hutao trace session id 应尽量对齐。
+10. TraceRecorder 在可用时应复用当前 native session id，避免 native 与 trace 分裂成两个 session。
+```
+
+当前 repo-local native session 目录形态：
+
+```text
+.hutao/sessions/
+└── sess_<id>/
+    ├── native-session.jsonl   # 原生聊天/resume 状态
+    ├── session.json           # Hutao trace metadata
+    ├── events.jsonl           # prompting/run/edit/merge/revert 事实事件
+    ├── raw.jsonl              # sanitized evidence layer
+    └── patches/
+        └── e_<id>.patch
+```
+
+native fork 目录形态：
+
+```text
+.hutao/sessions/
+└── fs_<id>/
+    └── native-session.jsonl
+```
+
+repo-local native session 的 parent 引用必须是 repo-relative，例如：
+
+```text
+.hutao/sessions/sess_<id>/native-session.jsonl
+```
+
+不要写成：
+
+```text
+D:\\repo\\.hutao\\sessions\\sess_<id>\\native-session.jsonl
+/home/user/repo/.hutao/sessions/sess_<id>/native-session.jsonl
+```
+
+#### 14.5.2 尚未完成，不要误报完成
+
+以下能力仍然属于下一阶段，不能在未实现时对外宣称已经完成：
+
+```text
+1. clone 到另一台机器后，真实 TUI resume 端到端验收。
+2. resume picker 中明确标注 repo-local / global session 来源。
+3. 打开 repo-local session 后完整恢复 user / assistant / tool / diff 卡片的用户可见体验。
+4. native entry 与 Hutao prompting/run/edit ID 的稳定映射。
+5. /prompting <id>、/edit <id> 详情页中从该节点继续时，自动创建 native branch + forkSession。
+6. /fork prompting 和 /fork edit 与 Pi/Hutao native session tree 的完整联动。
+7. raw-only 历史的 degraded/incomplete UI 标识。
+8. repo-local native session 与 merge/revert resolution edit 的完整关联。
+9. 跨 Windows / GitHub / WSL 的完整 clone -> resume -> continue -> commit -> pull 验收。
+```
+
+特别注意：
+
+```text
+能在 /session 里看到 trace，不等于完成聊天级 resume。
+能在 resume picker 里看到 native-session.jsonl，也不等于完成 prompting/edit 级 fork。
+```
+
+#### 14.5.3 下一阶段执行顺序
+
+后续实现必须按以下顺序推进，除非用户明确要求改变优先级：
+
+```text
+Phase A: repo-local native session foundation
+  状态：已完成第一版。
+  验收：SessionManager 单测通过，native session 写入 .hutao/sessions/<id>/native-session.jsonl。
+
+Phase B: resume UX hardening
+  目标：让 clone 后的 hutao resume 入口清晰展示 repo-local sessions。
+  必做：
+    1. resume/session selector 显示 session 来源：repo-local / global / raw-only。
+    2. startup notice 发现 .hutao/sessions 时提示用户可 resume。
+    3. 打开 repo-local session 后确认继续输入会写回 .hutao。
+    4. 增加端到端 clone path test 或手动验收脚本。
+
+Phase C: native entry <-> trace event mapping
+  目标：把聊天树中的 entry 与 prompting/run/edit 事实事件互相引用。
+  必做：
+    1. prompting event 记录 native user entry id。
+    2. run_started/run_finished 记录 native tool call/result entry id。
+    3. edit event 记录 native diff/edit entry id 或 custom entry id。
+    4. session.json 或独立 mapping 文件可重建该关系。
+
+Phase D: fork from prompting/edit
+  目标：从历史 prompting/edit 继续时，同时创建 native branch 和 Hutao forkSession。
+  必做：
+    1. /fork prompting <id> --before|--retry|--after。
+    2. /fork edit <id> --before|--after。
+    3. /prompting 和 /edit 详情 action 调用同一套逻辑。
+    4. 旧 session append-only，新工作写入 fs_<id>。
+
+Phase E: merge/revert 与 native conversation 对齐
+  目标：merge/revert 不只写 trace，也能在聊天 UI 中解释来源。
+  必做：
+    1. merge event 与 native custom entry 关联。
+    2. revert preview 与 native custom entry 关联。
+    3. conflict/resolution edit 进入同一事实链。
+
+Phase F: Pi decoupling after proof
+  目标：只有在 repo-local resume/fork/merge/revert 闭环稳定后，才继续减少 Pi 命名和全局依赖。
+```
+
+#### 14.5.4 禁止走回临时方案
+
+后续实现不要把以下临时方案当成最终架构：
+
+```text
+1. 不要把 .hutao/sessions/* 复制到 ~/.pi/agent/sessions 后再 resume，除非是显式迁移工具。
+2. 不要只把 raw.jsonl 拼成伪聊天记录。
+3. 不要把 trace events 当成 system/developer instruction 注入模型。
+4. 不要为了 resume 方便重新引入绝对 cwd。
+5. 不要让 repo-local native session 只在当前机器可用。
+6. 不要让 fork 只产生 trace forkSession 而不产生 native branch。
+7. 不要让 fork 只产生 native branch 而不产生 Hutao forkSession event。
+```
+
+#### 14.5.5 每次相关修改后的最低验证
+
+任何修改 repo-local native resume、session picker、fork、trace/native mapping 的代码后，至少运行：
+
+```bash
+npm run check
+cd packages/coding-agent
+npm test -- test/session-manager/file-operations.test.ts
+npm run build
+```
+
+如果修改了真实 resume/fork UI，还必须补充手动或自动验收：
+
+```text
+1. 在 repo A 创建 Hutao session。
+2. 提交 .hutao/sessions/<id>/native-session.jsonl 与 trace 文件。
+3. clone 到 repo B。
+4. repo B 启动 hutao。
+5. resume picker 能显示 repo-local session。
+6. 打开后能继续输入。
+7. 新增数据写回 repo B 的 .hutao/。
+8. commit/push 后 repo A pull 能看到新 fork/session。
+```
+
 ---
 
 ## 15. slash commands
