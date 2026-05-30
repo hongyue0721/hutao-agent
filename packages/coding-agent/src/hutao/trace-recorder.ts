@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ToolResultEvent } from "../core/extensions/types.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoSessionMetadata } from "./event-store.ts";
-import { GitAdapter } from "./git-adapter.ts";
+import { GitAdapter, type WorktreeSnapshot } from "./git-adapter.ts";
 import { createHutaoId } from "./ids.ts";
 import { rebuildIndex } from "./index-builder.ts";
 import { PatchStore } from "./patch-store.ts";
@@ -18,8 +18,8 @@ interface RunState {
 	cwd: string;
 	beforeHead?: string;
 	beforeTree?: string;
-	beforePatch: string;
 	beforePatchHash: string;
+	beforeSnapshot: WorktreeSnapshot;
 	startedAt: string;
 }
 
@@ -131,6 +131,7 @@ export class TraceRecorder {
 		if (!this.activePromptingId) return;
 		const id = createHutaoId("r");
 		const beforePatch = await this.git.getWorktreeDiff();
+		const beforeSnapshot = await this.git.getWorktreeSnapshot();
 		const inputSummary = summarizeInput(tool, input);
 		const run: RunState = {
 			id,
@@ -143,8 +144,8 @@ export class TraceRecorder {
 			cwd: this.paths.toRepoRelative(cwd) ?? ".",
 			beforeHead: await this.git.getHead(),
 			beforeTree: await this.git.getTree(),
-			beforePatch,
 			beforePatchHash: hashText(beforePatch),
+			beforeSnapshot,
 			startedAt: new Date().toISOString(),
 		};
 		this.runs.set(toolCallId, run);
@@ -185,11 +186,14 @@ export class TraceRecorder {
 			created_at: new Date().toISOString(),
 		});
 		const afterPatch = await this.git.getWorktreeDiff();
+		const afterSnapshot = await this.git.getWorktreeSnapshot();
+		const deltaFiles = this.git.getChangedFilesBetweenSnapshots(run.beforeSnapshot, afterSnapshot);
+		const runPatch = deltaFiles.length > 0 ? await this.git.getWorktreeDiffForFiles(deltaFiles) : "";
 		const afterHead = await this.git.getHead();
 		const afterTree = await this.git.getTree();
 		const producedEditIds: string[] = [];
-		if (!event.isError && afterPatch !== run.beforePatch) {
-			const editId = await this.recordEdit(run, event, afterPatch, afterHead, afterTree);
+		if (!event.isError && runPatch.trim()) {
+			const editId = await this.recordEdit(run, event, runPatch, afterHead, afterTree);
 			if (editId) producedEditIds.push(editId);
 		}
 		if (!event.isError && run.tool === "bash" && run.beforeHead && afterHead && run.beforeHead !== afterHead) {

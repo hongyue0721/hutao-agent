@@ -18,6 +18,16 @@ export interface FileHashEntry {
 	hash: string;
 }
 
+export interface WorktreeFileState {
+	path: string;
+	status: string;
+	hash?: string;
+}
+
+export interface WorktreeSnapshot {
+	files: Record<string, WorktreeFileState>;
+}
+
 export class GitAdapter {
 	private cwd: string;
 
@@ -73,15 +83,61 @@ export class GitAdapter {
 	}
 
 	async getWorktreeDiff(): Promise<string> {
+		return this.getWorktreeDiffForFiles();
+	}
+
+	async getWorktreeSnapshot(): Promise<WorktreeSnapshot> {
 		const ignore = HutaoIgnore.load(this.cwd);
-		const tracked = await this.run(["diff", "--binary", "--", ...ignore.toGitPathspecExcludes()]);
-		const untracked = await this.run(["ls-files", "--others", "--exclude-standard"]);
+		const result = await this.run(["status", "--porcelain=v1", "--untracked-files=all", "--", ".", ...ignore.toGitPathspecExcludes()]);
+		const files: Record<string, WorktreeFileState> = {};
+		for (const rawLine of result.stdout.split(/\r?\n/)) {
+			if (!rawLine.trim()) continue;
+			const status = rawLine.slice(0, 2);
+			let file = rawLine.slice(3).trim().replace(/\\/g, "/");
+			const rename = file.match(/^(.*?)\s+->\s+(.*)$/);
+			if (rename) file = rename[2];
+			if (!file || ignore.isIgnored(file)) continue;
+			const hashResult = await this.run(["hash-object", "--", file]);
+			files[file] = {
+				path: file,
+				status,
+				hash: hashResult.ok && hashResult.stdout.trim() ? `sha1:${hashResult.stdout.trim()}` : undefined,
+			};
+		}
+		return { files };
+	}
+
+	getChangedFilesBetweenSnapshots(before: WorktreeSnapshot, after: WorktreeSnapshot): string[] {
+		const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)]);
+		return [...paths]
+			.filter((path) => {
+				const beforeState = before.files[path];
+				const afterState = after.files[path];
+				return beforeState?.status !== afterState?.status || beforeState?.hash !== afterState?.hash;
+			})
+			.sort();
+	}
+
+	async getWorktreeDiffForFiles(files?: string[]): Promise<string> {
+		const ignore = HutaoIgnore.load(this.cwd);
+		const selectedFiles = files?.filter((file) => !ignore.isIgnored(file));
+		if (selectedFiles && selectedFiles.length === 0) return "";
+		const pathspec = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [".", ...ignore.toGitPathspecExcludes()];
+		const tracked = await this.run(["diff", "--binary", "--", ...pathspec]);
 		let patch = tracked.stdout;
-		for (const file of untracked.stdout
+		const untrackedResult = await this.run([
+			"ls-files",
+			"--others",
+			"--exclude-standard",
+			"--",
+			...(selectedFiles && selectedFiles.length > 0 ? selectedFiles : ["."]),
+		]);
+		for (const file of untrackedResult.stdout
 			.split(/\r?\n/)
-			.map((line) => line.trim())
+			.map((line) => line.trim().replace(/\\/g, "/"))
 			.filter(Boolean)) {
 			if (ignore.isIgnored(file)) continue;
+			if (selectedFiles && !selectedFiles.includes(file)) continue;
 			const result = await this.run(["diff", "--binary", "--no-index", "--", "/dev/null", file]);
 			patch += result.stdout;
 		}

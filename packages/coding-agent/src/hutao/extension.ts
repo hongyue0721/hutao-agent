@@ -18,29 +18,29 @@ import { SessionRegistry } from "./session-registry.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
 import { commandNeedsTraceStage, getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
 
-const HUTAO_EXTENSION_LOADED = Symbol.for("hutao-agent.trace-extension.loaded");
-
-type HutaoGlobalState = typeof globalThis & {
-	[HUTAO_EXTENSION_LOADED]?: boolean;
+type HutaoTraceExtensionState = {
+	recorder?: TraceRecorder;
+	recorderRepoRoot?: string;
+	startupNoticeRepos: Set<string>;
 };
 
-let recorder: TraceRecorder | undefined;
-let recorderRepoRoot: string | undefined;
-const startupNoticeRepos = new Set<string>();
-
-async function getRecorder(ctx: ExtensionContext): Promise<TraceRecorder | undefined> {
+async function createRecorder(ctx: ExtensionContext, state: HutaoTraceExtensionState): Promise<TraceRecorder | undefined> {
 	const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
 	if (!repoRoot) return undefined;
 	const registry = new SessionRegistry(repoRoot);
 	const currentSessionId = registry.readCurrentSessionId();
-	if (recorder && recorderRepoRoot === repoRoot && (!currentSessionId || recorder.getSessionId() === currentSessionId)) {
-		return recorder;
+	if (
+		state.recorder &&
+		state.recorderRepoRoot === repoRoot &&
+		(!currentSessionId || state.recorder.getSessionId() === currentSessionId)
+	) {
+		return state.recorder;
 	}
 	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
-	recorderRepoRoot = repoRoot;
-	recorder = new TraceRecorder(repoRoot, currentMetadata);
-	await recorder.init();
-	return recorder;
+	state.recorderRepoRoot = repoRoot;
+	state.recorder = new TraceRecorder(repoRoot, currentMetadata);
+	await state.recorder.init();
+	return state.recorder;
 }
 
 function getPathInput(event: ToolCallEvent): string | undefined {
@@ -59,10 +59,14 @@ function isDangerousCommand(command: string): boolean {
 	);
 }
 
+// Keep Hutao state scoped to one loaded extension instance. ResourceLoader can
+// rebuild runtimes during reload/resume/fork, and process-global dedupe would
+// silently skip handler registration for the real runtime. If built-in extension
+// de-duplication is needed later, do it in the loader with explicit identities,
+// not by short-circuiting this factory.
 export default function hutaoTraceExtension(pi: ExtensionAPI): void {
-	const state = globalThis as HutaoGlobalState;
-	if (state[HUTAO_EXTENSION_LOADED]) return;
-	state[HUTAO_EXTENSION_LOADED] = true;
+	const state: HutaoTraceExtensionState = { startupNoticeRepos: new Set() };
+	const getRecorder = (ctx: ExtensionContext) => createRecorder(ctx, state);
 
 	pi.on("session_start", async (_event, ctx) => {
 		const active = await getRecorder(ctx);
@@ -79,8 +83,8 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 				? `hutao trace: unstaged ${traceStatus.unstaged.length + traceStatus.untracked.length}`
 				: `hutao trace: ${active.getSessionId().slice(0, 18)}`,
 		);
-		if (startupNoticeRepos.has(repoRoot)) return;
-		startupNoticeRepos.add(repoRoot);
+		if (state.startupNoticeRepos.has(repoRoot)) return;
+		state.startupNoticeRepos.add(repoRoot);
 		const sessions = new SessionRegistry(repoRoot).readSessions();
 		if (sessions.length > 0) {
 			ctx.ui.notify(`Found ${sessions.length} Hutao sessions. Use /session to browse and resume.`, "info");

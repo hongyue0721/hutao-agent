@@ -157,3 +157,116 @@ Attribution:
 ## User Override
 
 If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
+
+
+## Hutao repo-local trace test rules
+
+These rules are mandatory for Hutao trace sync tests. They are intentionally strict because Pi global sessions and Hutao repo-local traces are different systems.
+
+### Source of truth
+
+- `.hutao/` is Hutao's repo-local trace source of truth.
+- `~/.pi/agent/sessions/` is only Pi's global transcript store.
+- A Pi global session is not a valid replacement for repo-local Hutao trace.
+- A sync test passes only if canonical `.hutao` files are committed and can be pulled in another clone.
+
+Canonical Hutao trace files are:
+
+```text
+.hutao/manifest.json
+.hutao/refs/
+.hutao/sessions/
+```
+
+Do not treat these as canonical trace:
+
+```text
+.hutao/index/
+.hutao/cache/
+.hutao/tmp/
+~/.pi/agent/sessions/
+```
+
+### Required preflight for every sync experiment
+
+Before asking the agent to edit code in a test repo, run Hutao from that repo and verify trace initialization:
+
+```bash
+hutao
+```
+
+Inside Hutao, run:
+
+```text
+/doctor
+```
+
+The test must stop immediately if `/doctor` does not show Hutao diagnostics or if the repo does not contain:
+
+```text
+.hutao/manifest.json
+.hutao/sessions/<session>/session.json
+.hutao/sessions/<session>/events.jsonl
+```
+
+### Required checks before commit
+
+Before every Git commit in a Hutao trace sync test, check:
+
+```bash
+git status --short .hutao
+git ls-files .hutao
+```
+
+Then run inside Hutao:
+
+```text
+/git stage-trace
+```
+
+A commit that contains code but omits canonical `.hutao` trace is not a successful Hutao sync commit.
+
+### Required checks after commit and push
+
+After commit:
+
+```bash
+git ls-files .hutao
+git log --oneline -- .hutao
+```
+
+After pushing and pulling in another clone or WSL checkout, verify:
+
+```bash
+git ls-files .hutao
+find .hutao/sessions -maxdepth 2 -type f
+```
+
+The pulled clone must be able to browse the trace with:
+
+```text
+/session
+/prompting
+/edit
+/git
+/doctor
+```
+
+### Failure diagnosis
+
+If code commits appear in GitHub but `.hutao` does not appear in the clone, classify the failure before continuing:
+
+```text
+A. hutao command was not used
+B. an old hutao build was used
+C. Hutao built-in trace extension did not load
+D. .hutao was generated but not staged/committed
+E. commit went to a different branch or remote
+F. WSL/Windows clone is on a different branch or remote
+```
+
+Never conclude that GitHub pull is broken until `.hutao` has been confirmed committed with:
+
+```bash
+git log --oneline -- .hutao
+```
