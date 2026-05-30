@@ -179,8 +179,11 @@ Tasks:
 1. /fork prompting <id> --before|--retry|--after.
 2. /fork edit <id> --before|--after.
 3. /prompting and /edit details expose menu actions that call the same logic.
-4. Old session remains append-only.
-5. New work writes to fs_<id> with fork_session event.
+4. Viewing a historical prompting/edit never forks by itself.
+5. Continuing a conversation from a selected historical prompting/edit must fork before recording the next user message.
+6. The continuation fork must create both a native session tree branch and a Hutao forkSession.
+7. Old session remains append-only.
+8. New work writes to fs_<id> with fork_session event.
 ```
 
 ### Phase E — merge/revert native alignment
@@ -283,12 +286,14 @@ Resume / Continue from here
 Storage behavior:
 
 ```text
-1. Do not mutate pulled historical entries.
-2. Do not append new work under old historical prompting/edit as if it happened then.
-3. Create or switch to a safe continuation session, normally a forkSession.
-4. Create native session tree branch.
-5. Record fork_from metadata.
-6. Write new promptings/runs/edits into the continuation session.
+1. Viewing or selecting a historical prompting/edit only opens a detail or action view; it must not fork.
+2. If the user continues chatting from that historical prompting/edit context, Hutao must automatically fork before the next user message is recorded.
+3. Do not mutate pulled historical entries.
+4. Do not append new work under old historical prompting/edit as if it happened then.
+5. Create or switch to a safe continuation session, normally a forkSession.
+6. Create native session tree branch.
+7. Record fork_from metadata.
+8. Write new promptings/runs/edits into the continuation session.
 ```
 
 Required dual write for historical continuation:
@@ -300,6 +305,72 @@ native session tree branch
 ```
 
 Do not implement only one side.
+
+Recommended iteration order:
+
+```text
+1. Implement the complete Phase D loop in one cohesive architecture, not as one-off command patches.
+2. Support explicit actions such as Resume after / Retry / Fork before / Fork after.
+3. Support armed historical context: after selecting a historical prompting/edit, if the next user input is normal chat, auto-fork before sending it.
+4. In both cases, old sess_<id> remains unchanged and new work goes to fs_<id>.
+```
+
+Required Phase D architecture:
+
+```text
+/fork command, /prompting actions, /edit actions, and armed-context auto-fork
+  -> HutaoForkCoordinator
+  -> ForkTargetResolver
+  -> NativeForkManager
+  -> ForkSessionManager
+```
+
+Responsibilities:
+
+```text
+ForkTargetResolver:
+  Resolve prompting/edit/commit + mode into a native target entry and Hutao source event.
+  It must not mutate files or sessions.
+
+NativeForkManager:
+  Create or switch native session tree branches.
+  Today it may call Pi ctx.fork(...), but this dependency must stay isolated for future Pi decoupling.
+
+ForkSessionManager:
+  Handle Hutao forkSession metadata, fork_session event, worktree restore/replay, and index rebuild.
+  It must accept a coordinator-provided fs_<id> so native and Hutao ids stay aligned.
+
+HutaoForkCoordinator:
+  Generate one fs_<id>, coordinate resolver/native/trace managers, handle degraded mode, and return a single result for UI commands.
+```
+
+Hard requirements:
+
+```text
+1. Native branch id and Hutao forkSession id must be the same fs_<id>.
+2. Do not create native fs_A plus Hutao fs_B for one continuation.
+3. /fork, /prompting action menus, /edit action menus, and armed auto-fork must reuse the same coordinator.
+4. If native entry mapping is missing, report degraded mode explicitly; never pretend a full native fork happened.
+5. Degraded mode may create Hutao forkSession metadata, but UI must say native branch was unavailable and why.
+6. retry_prompting keeps the original prompting immutable and uses its text as the retry input in the new fs_<id> context.
+7. New user input after armed auto-fork must be recorded only in fs_<id>, not in the old sess_<id>.
+```
+
+Phase D acceptance checklist:
+
+```text
+1. /prompting selection for view/details does not fork.
+2. /edit selection for view/details does not fork.
+3. /prompting -> Resume after creates one fs_<id> with native-session.jsonl + session.json/events.jsonl.
+4. /prompting -> Retry creates one fs_<id> and preserves the original prompting unchanged.
+5. /prompting -> Fork before creates one fs_<id> before that prompting's native user entry when mapping exists.
+6. /edit -> Continue after creates one fs_<id> after the edit-related native entry when mapping exists.
+7. /edit -> Try before creates one fs_<id> before the edit effect when mapping/worktree restore allows it.
+8. Selecting a historical prompting/edit and then typing normal chat auto-forks before that message is persisted.
+9. native-session.jsonl and Hutao session.json/events.jsonl share the same fs_<id>.
+10. Missing native mapping produces a degraded warning instead of a fake full fork.
+11. Old sess_<id> remains append-only and receives no new prompting/run/edit from the continuation.
+```
 
 ---
 

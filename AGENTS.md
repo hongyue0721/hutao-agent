@@ -1617,9 +1617,28 @@ available modes
 
 只是查看历史，不创建 forkSession。
 
+在 `/prompting` 或 `/edit` 列表中选中历史节点，也只是进入详情页或 action 菜单，不应立即 fork。
+
+硬规则：
+
+```text
+查看历史 ≠ 继续历史
+选中历史节点 ≠ fork
+```
+
 ### 16.2 基于历史继续工作必须 fork
 
 如果用户在历史节点上下文里继续提问或继续修改，必须创建 forkSession。
+
+包括：
+
+```text
+1. 用户显式选择 Resume after / Retry / Fork before / Fork after 等 action。
+2. 用户选中历史 prompting/edit 后，下一次普通聊天输入表达“从这里继续”。
+3. UI 进入 armed historical context 后，用户直接开始对话。
+```
+
+在第 2/3 种情况下，Hutao 必须在记录下一条 user prompting 之前自动 fork。
 
 不要在旧 edit 或旧 prompting 下方直接追加。
 
@@ -1630,6 +1649,7 @@ available modes
 旧 prompting 不变
 旧 edit 不变
 创建 forkSession
+创建 native session tree branch
 新的 prompting/run/edit 写入 forkSession
 ```
 
@@ -1639,6 +1659,114 @@ available modes
 直接覆盖旧 edit
 直接修改旧 prompting 文本
 直接在旧 session 上伪装成历史连续
+```
+
+### 16.2.1 Phase D 必须一次打通的完整闭环
+
+Phase D 不能只做 `/fork` 的临时命令补丁，而要形成可迭代架构。
+
+用户可见闭环必须是：
+
+```text
+/prompting 或 /edit 选中历史节点
+  -> 仅查看详情：不 fork
+  -> 显式选择 Resume / Retry / Fork before / Continue after：立即 fork
+  -> 或在 armed historical context 中直接输入普通对话：发送前自动 fork
+  -> 创建同一个 fs_<id>
+       .hutao/sessions/fs_<id>/native-session.jsonl
+       .hutao/sessions/fs_<id>/session.json
+       .hutao/sessions/fs_<id>/events.jsonl
+  -> 后续 prompting/run/edit 全部写入 fs_<id>
+```
+
+必须支持两类入口：
+
+```text
+1. 显式 action fork：
+   /prompting 选中节点 -> Resume after / Retry / Fork before / Fork after -> 立即创建 forkSession + native branch
+   /edit 选中节点 -> Continue after / Try before -> 立即创建 forkSession + native branch
+
+2. armed historical context 自动 fork：
+   /prompting 或 /edit 选中历史节点
+   用户没有显式点 action，而是直接输入下一条普通对话
+   Hutao 在记录这条 user prompting 之前自动 fork
+   这条新 prompting 写入 fs_<id>，不是旧 sess_<id>
+```
+
+两类入口都必须保持：
+
+```text
+旧历史 append-only
+新工作进入 fs_<id>
+.hutao forkSession metadata 与 native branch 同步创建
+```
+
+### 16.2.2 Phase D 架构要求
+
+必须抽象为可复用协调层，不要把逻辑散落到 `/fork`、`/prompting`、`/edit` 各自命令里。
+
+推荐结构：
+
+```text
+/fork command
+/prompting action menu
+/edit action menu
+armed historical context auto-fork
+  ↓
+HutaoForkCoordinator
+  ↓
+ForkTargetResolver
+  ↓
+NativeForkManager
+  ↓
+ForkSessionManager
+```
+
+职责：
+
+```text
+ForkTargetResolver:
+  根据 prompting/edit/commit + mode 解析 Hutao source event 和 native target entry。
+  只做解析，不修改文件、不切换 session。
+
+NativeForkManager:
+  封装 native session tree branch 创建。
+  第一阶段可以调用 Pi ctx.fork(...)，但依赖必须隔离，方便后续 Pi decoupling。
+
+ForkSessionManager:
+  负责 Hutao forkSession metadata、fork_session event、worktree restore/replay、index rebuild。
+  必须接受 coordinator 生成的 fs_<id>，不能自己另造不一致的 id。
+
+HutaoForkCoordinator:
+  生成统一 fs_<id>，协调 resolver/native/trace managers，处理 degraded mode，并返回统一结果给 UI。
+```
+
+硬要求：
+
+```text
+1. native branch id 与 Hutao forkSession id 必须是同一个 fs_<id>。
+2. 禁止一次 continuation 出现 native fs_A、Hutao fs_B。
+3. /fork、/prompting action、/edit action、armed auto-fork 必须复用同一套 coordinator。
+4. 如果 native entry mapping 缺失，必须进入 degraded mode 并明确提示；不能伪装成完整 native fork。
+5. degraded mode 可以创建 Hutao forkSession metadata，但 UI 必须说明 native branch unavailable 及原因。
+6. retry_prompting 保留原 prompting 不变，并在新的 fs_<id> 上使用原文本作为 retry 输入。
+7. armed auto-fork 的新 user input 只能记录到 fs_<id>，不能写回旧 sess_<id>。
+```
+
+Phase D 验收清单：
+
+```text
+1. /prompting 选中查看/详情不 fork。
+2. /edit 选中查看/详情不 fork。
+3. /prompting -> Resume after 创建同一个 fs_<id> 的 native-session.jsonl + session.json/events.jsonl。
+4. /prompting -> Retry 创建同一个 fs_<id>，原 prompting 不变。
+5. /prompting -> Fork before 在 mapping 存在时从该 prompting 的 native user entry 前创建 native branch。
+6. /edit -> Continue after 在 mapping 存在时从 edit 相关 native entry 后创建 native branch。
+7. /edit -> Try before 在 mapping/worktree restore 允许时从 edit 前状态创建 fs_<id>。
+8. 选中历史 prompting/edit 后直接输入普通对话，会在持久化该消息前自动 fork。
+9. native-session.jsonl 与 Hutao session.json/events.jsonl 使用同一个 fs_<id>。
+10. 缺少 native mapping 时显示 degraded warning，而不是假装完整 fork。
+11. 旧 sess_<id> 保持 append-only，不接收 continuation 的新 prompting/run/edit。
 ```
 
 ### 16.3 Prompting fork modes
