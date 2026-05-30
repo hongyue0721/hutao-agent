@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { getRepoLocalSessionDir, SessionManager } from "../../src/core/session-manager.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION } from "../../src/hutao/event-store.ts";
 import { GitAdapter } from "../../src/hutao/git-adapter.ts";
 import { HutaoIgnore } from "../../src/hutao/hutao-ignore.ts";
@@ -29,6 +30,13 @@ async function initRepo(repo: string): Promise<GitAdapter> {
 	await git.run(["add", "file.txt"]);
 	await git.run(["commit", "-m", "init"]);
 	return git;
+}
+
+function readTraceEvents(repo: string, sessionId: string): Array<Record<string, unknown>> {
+	return readFileSync(join(repo, ".hutao", "sessions", sessionId, "events.jsonl"), "utf-8")
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 afterEach(() => {
@@ -132,6 +140,49 @@ describe("TraceRecorder", () => {
 		expect(existsSync(join(repo, ".hutao", "index", "edits.json"))).toBe(true);
 		const edits = JSON.parse(readFileSync(join(repo, ".hutao", "index", "edits.json"), "utf-8")) as unknown[];
 		expect(edits).toHaveLength(1);
+	});
+
+	it("anchors trace events to the current repo-local native session leaf", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir);
+		const leafId = nativeSession.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+			sessionId: nativeSession.getSessionId(),
+			sessionFile: nativeSession.getSessionFile(),
+			leafEntryId: nativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		await recorder.recordPrompting("change file", repo);
+		await recorder.startRun("write", "tool_native", { path: "file.txt" }, repo);
+		writeFileSync(join(repo, "file.txt"), "after native\n", "utf-8");
+		await recorder.finishRun(
+			{
+				type: "tool_result",
+				toolName: "write",
+				toolCallId: "tool_native",
+				input: { path: "file.txt" },
+				content: [{ type: "text", text: "ok" }],
+				details: undefined,
+				isError: false,
+			},
+			repo,
+		);
+
+		const events = readTraceEvents(repo, nativeSession.getSessionId());
+		const prompting = events.find((event) => event.type === "prompting");
+		const runStarted = events.find((event) => event.type === "run_started");
+		const runFinished = events.find((event) => event.type === "run_finished");
+		const edit = events.find((event) => event.type === "edit");
+		for (const event of [prompting, runStarted, runFinished, edit]) {
+			expect(event?.native_session_id).toBe(nativeSession.getSessionId());
+			expect(event?.native_session_file).toBe(
+				`.hutao/sessions/${nativeSession.getSessionId()}/native-session.jsonl`,
+			);
+			expect(event?.native_anchor_entry_id).toBe(leafId);
+			expect(event?.native_anchor_relation).toBe("current_leaf_at_trace_event");
+		}
 	});
 
 	it("links commits observed from bash runs", async () => {

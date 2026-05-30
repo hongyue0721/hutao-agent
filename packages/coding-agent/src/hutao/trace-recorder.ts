@@ -9,6 +9,14 @@ import { PathMapper } from "./path-mapper.ts";
 import { isProtectedRepoPath, sanitizeText } from "./secret-guard.ts";
 import { SessionRegistry } from "./session-registry.ts";
 
+interface NativeTraceContext {
+	sessionId: string;
+	sessionFile?: string;
+	leafEntryId?: string | null;
+}
+
+type NativeTraceContextProvider = () => NativeTraceContext | undefined;
+
 interface RunState {
 	id: string;
 	tool: string;
@@ -61,8 +69,14 @@ export class TraceRecorder {
 	private paths: PathMapper;
 	private activePromptingId?: string;
 	private runs: Map<string, RunState>;
+	private nativeContextProvider?: NativeTraceContextProvider;
 
-	constructor(repoRoot: string, metadata?: HutaoSessionMetadata, sessionId?: string) {
+	constructor(
+		repoRoot: string,
+		metadata?: HutaoSessionMetadata,
+		sessionId?: string,
+		nativeContextProvider?: NativeTraceContextProvider,
+	) {
 		this.repoRoot = repoRoot;
 		this.sessionId = metadata?.id ?? sessionId ?? createHutaoId("sess");
 		this.store = new EventStore(repoRoot, this.sessionId);
@@ -70,6 +84,22 @@ export class TraceRecorder {
 		this.git = new GitAdapter(repoRoot);
 		this.paths = new PathMapper(repoRoot);
 		this.runs = new Map();
+		this.nativeContextProvider = nativeContextProvider;
+	}
+
+	setNativeContextProvider(nativeContextProvider?: NativeTraceContextProvider): void {
+		this.nativeContextProvider = nativeContextProvider;
+	}
+
+	private nativeTraceFields(): Record<string, unknown> {
+		const native = this.nativeContextProvider?.();
+		if (!native) return {};
+		return {
+			native_session_id: native.sessionId,
+			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
+			native_anchor_entry_id: native.leafEntryId ?? null,
+			native_anchor_relation: "current_leaf_at_trace_event",
+		};
 	}
 
 	async init(): Promise<void> {
@@ -90,6 +120,7 @@ export class TraceRecorder {
 			type: "prompting",
 			id,
 			session_id: this.sessionId,
+			...this.nativeTraceFields(),
 			actor: "human",
 			text: sanitized.text,
 			text_truncated: sanitized.truncated,
@@ -155,6 +186,7 @@ export class TraceRecorder {
 			id,
 			session_id: this.sessionId,
 			parent_prompting: this.activePromptingId,
+			...this.nativeTraceFields(),
 			actor: "agent",
 			tool,
 			tool_call_id: toolCallId,
@@ -233,6 +265,7 @@ export class TraceRecorder {
 			id: run.id,
 			session_id: this.sessionId,
 			parent_prompting: this.activePromptingId,
+			...this.nativeTraceFields(),
 			actor: "agent",
 			tool: run.tool,
 			tool_call_id: run.toolCallId,
@@ -277,6 +310,7 @@ export class TraceRecorder {
 				session_id: this.sessionId,
 				parent_prompting: this.activePromptingId,
 				parent_run: run.id,
+				...this.nativeTraceFields(),
 				actor: "agent",
 				tool: event.toolName,
 				files,
@@ -302,6 +336,7 @@ export class TraceRecorder {
 			session_id: this.sessionId,
 			parent_prompting: this.activePromptingId,
 			parent_run: run.id,
+			...this.nativeTraceFields(),
 			actor: "agent",
 			tool: event.toolName,
 			files,

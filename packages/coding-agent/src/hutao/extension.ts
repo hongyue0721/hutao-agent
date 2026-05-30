@@ -24,6 +24,14 @@ type HutaoTraceExtensionState = {
 	startupNoticeRepos: Set<string>;
 };
 
+function createNativeContextProvider(ctx: ExtensionContext) {
+	return () => ({
+		sessionId: ctx.sessionManager.getSessionId(),
+		sessionFile: ctx.sessionManager.getSessionFile(),
+		leafEntryId: ctx.sessionManager.getLeafId(),
+	});
+}
+
 async function createRecorder(
 	ctx: ExtensionContext,
 	state: HutaoTraceExtensionState,
@@ -39,11 +47,12 @@ async function createRecorder(
 		state.recorderRepoRoot === repoRoot &&
 		(!currentSessionId || state.recorder.getSessionId() === currentSessionId)
 	) {
+		state.recorder.setNativeContextProvider(createNativeContextProvider(ctx));
 		return state.recorder;
 	}
 	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
 	state.recorderRepoRoot = repoRoot;
-	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId);
+	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId, createNativeContextProvider(ctx));
 	await state.recorder.init();
 	return state.recorder;
 }
