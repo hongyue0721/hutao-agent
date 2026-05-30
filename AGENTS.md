@@ -1796,6 +1796,42 @@ npm run build
 npx vitest run packages/coding-agent/test/session-manager/file-operations.test.ts packages/coding-agent/test/hutao/core.test.ts
 ```
 
+### 16.2.3 当前 Phase D 进度指针
+
+最新已推送实现 checkpoint：
+
+```text
+433cef3 feat: coordinate hutao and native forks
+```
+
+当前已经可用：
+
+```text
+1. 显式历史 fork 路径已经通过 HutaoForkCoordinator 协调。
+2. /fork、/prompting action-menu、/edit action-menu 不再各自维护分散 fork 逻辑。
+3. 显式 fork 时，native branch session 与 Hutao forkSession 使用同一个 coordinator 生成的 fs_<id>。
+4. fork_session event 写入 native_fork metadata，包含 created/degraded 状态和 native linkage。
+5. 缺少 native entry mapping 时进入 degraded mode，不伪装成完整 native fork。
+6. retry_prompting 保留旧 prompting，并在 native fork 成功后把原文预填到 fresh native context。
+```
+
+Phase D 剩余重点：
+
+```text
+1. 把 armed historical context 接入 interactive submit pipeline。
+2. 目标行为：选中历史 prompting/edit 后直接输入普通对话，Hutao 在持久化该 user message 前自动 fork。
+3. 自动 fork 路径必须复用 HutaoForkCoordinator，新输入只能写入 fs_<id>。
+4. 后续尽量增强 /edit --before 的 native 语义；当前 before/after 文件状态由 Hutao restore/replay 处理。
+```
+
+该 checkpoint 已跑验证：
+
+```bash
+npm run check
+npm run build
+npx vitest run packages/coding-agent/test/session-manager/file-operations.test.ts packages/coding-agent/test/hutao/core.test.ts
+```
+
 ### 16.3 Prompting fork modes
 
 ```text

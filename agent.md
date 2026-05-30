@@ -213,6 +213,42 @@ npm run build
 npx vitest run packages/coding-agent/test/session-manager/file-operations.test.ts packages/coding-agent/test/hutao/core.test.ts
 ```
 
+### Current project status — latest Phase D checkpoint
+
+Latest pushed implementation checkpoint:
+
+```text
+433cef3 feat: coordinate hutao and native forks
+```
+
+What is now working:
+
+```text
+1. Explicit historical fork paths are coordinated through HutaoForkCoordinator.
+2. /fork, /prompting action-menu, and /edit action-menu no longer each own separate fork logic.
+3. Native branch session and Hutao forkSession use the same coordinator-generated fs_<id> for explicit forks.
+4. fork_session events include native_fork metadata with created/degraded status and native linkage.
+5. Missing native entry mapping is represented as degraded mode, not as a fake complete native fork.
+6. retry_prompting preserves old prompting and pre-fills original text in the fresh native context when native fork succeeds.
+```
+
+Important remaining Phase D work:
+
+```text
+1. Wire armed historical context into the interactive submit pipeline.
+2. Desired behavior: select historical prompting/edit, type normal chat, auto-fork before that user message is persisted.
+3. Ensure the auto-fork path reuses HutaoForkCoordinator and writes the new input only to fs_<id>.
+4. Improve native semantics for /edit --before where possible; current worktree before/after is handled by Hutao restore/replay.
+```
+
+Last validation run for the checkpoint:
+
+```bash
+npm run check
+npm run build
+npx vitest run packages/coding-agent/test/session-manager/file-operations.test.ts packages/coding-agent/test/hutao/core.test.ts
+```
+
 ### Phase E — merge/revert native alignment
 
 Goal: trace merge/revert facts also appear in the conversation UX.
