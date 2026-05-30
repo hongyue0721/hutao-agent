@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { HUTAO_SCHEMA_VERSION, EventStore, type HutaoSessionMetadata } from "./event-store.ts";
+import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoSessionMetadata } from "./event-store.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { createHutaoId } from "./ids.ts";
 

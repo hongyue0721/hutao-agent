@@ -5,8 +5,8 @@ import { CommitLinker } from "./commit-linker.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { ForkSessionManager } from "./fork-session-manager.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
-import { getHutaoLanguage, saveHutaoLanguage, selectAction, t, type HutaoLanguage } from "./i18n.ts";
 import { MergeManager, type MergeMode } from "./merge-manager.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
@@ -109,7 +109,11 @@ function editPatchPath(repoRoot: string, edit: HutaoEvent): string | undefined {
 		: undefined;
 }
 
-async function previewRevertEdit(editIdPrefix: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<boolean> {
+async function previewRevertEdit(
+	editIdPrefix: string,
+	repoRoot: string,
+	ctx: ExtensionCommandContext,
+): Promise<boolean> {
 	const events = readEvents(repoRoot);
 	const edit = findEvent(events, editIdPrefix, "edit");
 	if (!edit) {
@@ -139,7 +143,8 @@ async function previewRevertEdit(editIdPrefix: string, repoRoot: string, ctx: Ex
 		"",
 		"Applying this revert may affect the current project. Continue only if the preview looks safe.",
 	];
-	if (reverseCheck && !reverseCheck.ok) lines.push("", reverseCheck.stderr || reverseCheck.stdout || "Reverse patch check failed.");
+	if (reverseCheck && !reverseCheck.ok)
+		lines.push("", reverseCheck.stderr || reverseCheck.stdout || "Reverse patch check failed.");
 	notify(ctx, "Hutao revert preview", lines, reverseCheck?.ok === false || status !== "clean" ? "warning" : "info");
 	if (!patchPath || reverseCheck?.ok === false) return false;
 	return ctx.ui.confirm("Hutao revert preview", `Apply reverse patch for edit ${edit.id}?`);
@@ -209,7 +214,8 @@ async function resumeSession(sessionId: string, repoRoot: string, ctx: Extension
 	const session = registry.readSession(sessionId);
 	if (!session) return notify(ctx, "Hutao resume", [`Session not found: ${sessionId}`], "warning");
 	const continuation = await registry.createContinuationSession(session.id);
-	if (!continuation) return notify(ctx, "Hutao resume", [`Failed to create continuation for ${session.id}`], "warning");
+	if (!continuation)
+		return notify(ctx, "Hutao resume", [`Failed to create continuation for ${session.id}`], "warning");
 	rebuildIndex(repoRoot);
 	notify(ctx, "Hutao resume", [
 		`Created continuation forkSession ${continuation.id}`,
@@ -218,7 +224,11 @@ async function resumeSession(sessionId: string, repoRoot: string, ctx: Extension
 	]);
 }
 
-async function resumeFromPrompting(prompting: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
+async function resumeFromPrompting(
+	prompting: HutaoEvent,
+	repoRoot: string,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
 	const result = await new ForkSessionManager(repoRoot).createFork("prompting", String(prompting.id), "after");
 	if (!result.ok) return notify(ctx, "Hutao resume", [result.reason ?? "Resume failed."], "warning");
 	notify(ctx, "Hutao resume", [
@@ -264,7 +274,11 @@ async function runSessionAction(sessionId: string, repoRoot: string, ctx: Extens
 	notify(ctx, "Hutao session", [t(repoRoot, "menu.noAction")]);
 }
 
-async function runPromptingAction(prompting: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
+async function runPromptingAction(
+	prompting: HutaoEvent,
+	repoRoot: string,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
 	const choice = await selectAction(ctx, repoRoot, "prompting.action.title", [
 		{ id: "viewDetail", labelKey: "prompting.action.viewDetail" },
 		{ id: "resumeAfter", labelKey: "prompting.action.resumeAfter" },
@@ -326,11 +340,9 @@ export async function sessionCommand(args: string, ctx: ExtensionCommandContext)
 			sessionSummary(session, events),
 		);
 		if (!selected)
-			return notify(
-				ctx,
-				"Hutao session",
-				[t(repoRoot, sessions.length ? "session.noneSelected" : "session.noneFound")],
-			);
+			return notify(ctx, "Hutao session", [
+				t(repoRoot, sessions.length ? "session.noneSelected" : "session.noneFound"),
+			]);
 		return runSessionAction(selected.id, repoRoot, ctx);
 	}
 	const session = sessions.find((entry) => entry.id.startsWith(query));
@@ -408,17 +420,19 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 		promptings = promptings.filter((event) => eventText(event).includes(searchText));
 	}
 	if (!query || query.startsWith("--") || parts[0] === "search") {
-		const selected = await selectItem(ctx, t(repoRoot, "prompting.select.title"), promptings.slice(-30), (event) =>
-			`${shortId(event.id)} ${event.created_at ?? ""} ${String(event.text ?? "")
-				.split(/\r?\n/)[0]
-				?.slice(0, 120)}`,
+		const selected = await selectItem(
+			ctx,
+			t(repoRoot, "prompting.select.title"),
+			promptings.slice(-30),
+			(event) =>
+				`${shortId(event.id)} ${event.created_at ?? ""} ${String(event.text ?? "")
+					.split(/\r?\n/)[0]
+					?.slice(0, 120)}`,
 		);
 		if (!selected)
-			return notify(
-				ctx,
-				"Hutao prompting",
-				[t(repoRoot, promptings.length ? "prompting.noneSelected" : "prompting.noneFound")],
-			);
+			return notify(ctx, "Hutao prompting", [
+				t(repoRoot, promptings.length ? "prompting.noneSelected" : "prompting.noneFound"),
+			]);
 		return runPromptingAction(selected, repoRoot, ctx);
 	}
 	const prompting = findEvent(events, query, "prompting");
@@ -547,8 +561,12 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		edits = edits.filter((event) => conflictIds.has(String(event.id)) || event.status === "conflict");
 	}
 	if (!query || query.startsWith("--")) {
-		const selected = await selectItem(ctx, t(repoRoot, "edit.select.title"), edits.slice(-30), (event) =>
-			`${shortId(event.id)} ${event.created_at ?? ""} ${stringArray(event.files).join(", ") || firstLine(event.summary)}`,
+		const selected = await selectItem(
+			ctx,
+			t(repoRoot, "edit.select.title"),
+			edits.slice(-30),
+			(event) =>
+				`${shortId(event.id)} ${event.created_at ?? ""} ${stringArray(event.files).join(", ") || firstLine(event.summary)}`,
 		);
 		if (!selected)
 			return notify(ctx, "Hutao edit", [t(repoRoot, edits.length ? "edit.noneSelected" : "edit.noneFound")]);
@@ -1040,7 +1058,11 @@ export async function doctorCommand(args: string, ctx: ExtensionCommandContext):
 		ctx,
 		"Hutao doctor",
 		lines,
-		corruptJsonl || absoluteRepoLeak || protectedTextLeak || traceStatus.unstaged.length || traceStatus.untracked.length
+		corruptJsonl ||
+			absoluteRepoLeak ||
+			protectedTextLeak ||
+			traceStatus.unstaged.length ||
+			traceStatus.untracked.length
 			? "warning"
 			: "info",
 	);

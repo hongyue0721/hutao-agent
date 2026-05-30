@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { basename, dirname, relative, sep } from "node:path";
 import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
@@ -32,6 +34,13 @@ export interface SessionHeader {
 	version?: number; // v1 sessions don't have this
 	id: string;
 	timestamp: string;
+	/**
+	 * Working directory for native session execution.
+	 *
+	 * Repo-local Hutao native sessions intentionally store "." here so cloned
+	 * repositories do not persist machine-specific absolute paths. SessionManager
+	 * resolves it against the current process cwd when the session is opened.
+	 */
 	cwd: string;
 	parentSession?: string;
 }
@@ -200,6 +209,124 @@ export type ReadonlySessionManager = Pick<
 
 function createSessionId(): string {
 	return uuidv7();
+}
+
+const HUTAO_DIR_NAME = ".hutao";
+const HUTAO_SESSIONS_DIR_NAME = "sessions";
+const HUTAO_NATIVE_SESSION_FILE = "native-session.jsonl";
+const REPO_PLACEHOLDER = "$" + "{REPO}";
+
+function createRepoLocalSessionId(kind: "session" | "fork" = "session"): string {
+	return `${kind === "fork" ? "fs" : "sess"}_${uuidv7()}`;
+}
+
+function findGitRepoRoot(cwd: string): string | undefined {
+	try {
+		const output = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return output ? resolvePath(output) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Return the repo-local Hutao native session store for cwd, if cwd is inside a Git repo. */
+export function getRepoLocalSessionDir(cwd: string): string | undefined {
+	const repoRoot = findGitRepoRoot(cwd);
+	return repoRoot ? join(repoRoot, HUTAO_DIR_NAME, HUTAO_SESSIONS_DIR_NAME) : undefined;
+}
+
+function isRepoLocalSessionsDir(sessionDir: string): boolean {
+	const normalized = normalizePath(sessionDir);
+	return basename(normalized) === HUTAO_SESSIONS_DIR_NAME && basename(dirname(normalized)) === HUTAO_DIR_NAME;
+}
+
+function isRepoLocalNativeSessionFile(filePath: string): boolean {
+	return basename(normalizePath(filePath)) === HUTAO_NATIVE_SESSION_FILE;
+}
+
+function getRepoLocalNativeSessionFile(sessionDir: string, sessionId: string): string {
+	return join(sessionDir, sessionId, HUTAO_NATIVE_SESSION_FILE);
+}
+
+function getSessionHeaderCwdForRuntime(header: SessionHeader, fallbackCwd: string): string {
+	const cwd = getSessionHeaderCwd(header);
+	if (!cwd || cwd === ".") return resolvePath(fallbackCwd);
+	return cwd;
+}
+
+function toRepoLocalSessionRef(sessionDir: string, filePath: string | undefined): string | undefined {
+	if (!filePath) return undefined;
+	try {
+		const repoRoot = resolve(sessionDir, "..", "..");
+		const rel = relative(repoRoot, filePath).replace(/\\/g, "/");
+		if (!rel || rel.startsWith("..") || /^[A-Za-z]:/.test(rel)) return undefined;
+		return rel;
+	} catch {
+		return undefined;
+	}
+}
+
+function pathIsInside(parent: string, child: string): boolean {
+	const rel = relative(resolvePath(parent), resolvePath(child));
+	return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !/^[A-Za-z]:/.test(rel));
+}
+
+function uniqueSortedSessions(sessions: SessionInfo[]): SessionInfo[] {
+	const byPath = new Map<string, SessionInfo>();
+	for (const session of sessions) byPath.set(session.path, session);
+	return [...byPath.values()].sort((a, b) => b.modified.getTime() - a.modified.getTime());
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sanitizeRepoLocalText(text: string, repoRoot: string): string {
+	const resolvedRepoRoot = resolvePath(repoRoot);
+	const variants = [...new Set([resolvedRepoRoot, resolvedRepoRoot.replace(/\\/g, "/")])].filter(Boolean);
+	let result = text;
+	for (const variant of variants) {
+		result = result.replace(new RegExp(escapeRegExp(variant), "g"), REPO_PLACEHOLDER);
+	}
+	result = result.replace(/[A-Za-z]:[\\/][^\s"'`<>)]*/g, "[external-path-redacted]");
+	result = result.replace(/(?:^|\s)\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/g, (match) => {
+		const prefix = match.startsWith(" ") ? " " : "";
+		return `${prefix}[external-path-redacted]`;
+	});
+	return result;
+}
+
+function sanitizeRepoLocalEntry<T>(entry: T, repoRoot: string): T {
+	if (typeof entry === "string") return sanitizeRepoLocalText(entry, repoRoot) as T;
+	if (Array.isArray(entry)) return entry.map((item) => sanitizeRepoLocalEntry(item, repoRoot)) as T;
+	if (entry && typeof entry === "object") {
+		const copy: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(entry)) {
+			copy[key] = sanitizeRepoLocalEntry(value, repoRoot);
+		}
+		return copy as T;
+	}
+	return entry;
+}
+
+function hydrateRepoLocalText(text: string, repoRoot: string): string {
+	return text.replaceAll(REPO_PLACEHOLDER, resolvePath(repoRoot));
+}
+
+function hydrateRepoLocalEntry<T>(entry: T, repoRoot: string): T {
+	if (typeof entry === "string") return hydrateRepoLocalText(entry, repoRoot) as T;
+	if (Array.isArray(entry)) return entry.map((item) => hydrateRepoLocalEntry(item, repoRoot)) as T;
+	if (entry && typeof entry === "object") {
+		const copy: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(entry)) {
+			copy[key] = hydrateRepoLocalEntry(value, repoRoot);
+		}
+		return copy as T;
+	}
+	return entry;
 }
 
 export function assertValidSessionId(id: string): void {
@@ -508,23 +635,58 @@ function sessionCwdMatches(cwd: string | undefined, resolvedCwd: string): boolea
 export function findMostRecentSession(sessionDir: string, cwd?: string): string | null {
 	const resolvedSessionDir = normalizePath(sessionDir);
 	const resolvedCwd = cwd ? resolvePath(cwd) : undefined;
+	const repoLocal = isRepoLocalSessionsDir(resolvedSessionDir);
 	try {
-		const files = readdirSync(resolvedSessionDir)
-			.filter((f) => f.endsWith(".jsonl"))
-			.map((f) => join(resolvedSessionDir, f))
+		const files = collectSessionFilesSync(resolvedSessionDir);
+		const candidates = files
 			.map((path) => ({ path, header: readSessionHeader(path) }))
 			.filter(
 				(file): file is { path: string; header: SessionHeader } =>
 					file.header !== null &&
-					(!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.header), resolvedCwd)),
+					(repoLocal || !resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.header), resolvedCwd)),
 			)
 			.map(({ path }) => ({ path, mtime: statSync(path).mtime }))
 			.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
-		return files[0]?.path || null;
+		return candidates[0]?.path || null;
 	} catch {
 		return null;
 	}
+}
+
+function collectSessionFilesSync(dir: string): string[] {
+	if (!existsSync(dir)) return [];
+	const files: string[] = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+			files.push(path);
+			continue;
+		}
+		if (isRepoLocalSessionsDir(dir) && entry.isDirectory()) {
+			const nativeFile = join(path, HUTAO_NATIVE_SESSION_FILE);
+			if (existsSync(nativeFile)) files.push(nativeFile);
+		}
+	}
+	return files;
+}
+
+async function collectSessionFiles(dir: string): Promise<string[]> {
+	if (!existsSync(dir)) return [];
+	const files: string[] = [];
+	const entries = await readdir(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		const path = join(dir, entry.name);
+		if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+			files.push(path);
+			continue;
+		}
+		if (isRepoLocalSessionsDir(dir) && entry.isDirectory()) {
+			const nativeFile = join(path, HUTAO_NATIVE_SESSION_FILE);
+			if (existsSync(nativeFile)) files.push(nativeFile);
+		}
+	}
+	return files;
 }
 
 function isMessageWithContent(message: AgentMessage): message is Message {
@@ -706,8 +868,7 @@ async function listSessionsFromDir(
 	}
 
 	try {
-		const dirEntries = await readdir(dir);
-		const files = dirEntries.filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f));
+		const files = await collectSessionFiles(dir);
 		const total = progressTotal ?? files.length;
 
 		let loaded = 0;
@@ -777,6 +938,10 @@ export class SessionManager {
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
 			this.fileEntries = loadEntriesFromFile(this.sessionFile);
+			if (isRepoLocalSessionsDir(this.sessionDir)) {
+				const repoRoot = resolve(this.sessionDir, "..", "..");
+				this.fileEntries = this.fileEntries.map((entry) => hydrateRepoLocalEntry(entry, repoRoot));
+			}
 
 			// If file was empty or corrupted (no valid header), truncate and start fresh
 			// to avoid appending messages without a session header (which breaks the session)
@@ -809,14 +974,15 @@ export class SessionManager {
 		if (options?.id !== undefined) {
 			assertValidSessionId(options.id);
 		}
-		this.sessionId = options?.id ?? createSessionId();
+		const repoLocal = this.persist && isRepoLocalSessionsDir(this.sessionDir);
+		this.sessionId = options?.id ?? (repoLocal ? createRepoLocalSessionId("session") : createSessionId());
 		const timestamp = new Date().toISOString();
 		const header: SessionHeader = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
 			id: this.sessionId,
 			timestamp,
-			cwd: this.cwd,
+			cwd: repoLocal ? "." : this.cwd,
 			parentSession: options?.parentSession,
 		};
 		this.fileEntries = [header];
@@ -826,8 +992,14 @@ export class SessionManager {
 		this.flushed = false;
 
 		if (this.persist) {
-			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-			this.sessionFile = join(this.getSessionDir(), `${fileTimestamp}_${this.sessionId}.jsonl`);
+			if (repoLocal) {
+				const sessionSubdir = join(this.getSessionDir(), this.sessionId);
+				mkdirSync(sessionSubdir, { recursive: true });
+				this.sessionFile = join(sessionSubdir, HUTAO_NATIVE_SESSION_FILE);
+			} else {
+				const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+				this.sessionFile = join(this.getSessionDir(), `${fileTimestamp}_${this.sessionId}.jsonl`);
+			}
 		}
 		return this.sessionFile;
 	}
@@ -855,7 +1027,10 @@ export class SessionManager {
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const content = `${this.fileEntries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+		const entries = isRepoLocalSessionsDir(this.sessionDir)
+			? this.fileEntries.map((entry) => sanitizeRepoLocalEntry(entry, resolve(this.sessionDir, "..", "..")))
+			: this.fileEntries;
+		const content = `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
 		writeFileSync(this.sessionFile, content);
 	}
 
@@ -886,10 +1061,17 @@ export class SessionManager {
 	_persist(entry: SessionEntry): void {
 		if (!this.persist || !this.sessionFile) return;
 
+		const persistedEntry = isRepoLocalSessionsDir(this.sessionDir)
+			? sanitizeRepoLocalEntry(entry, resolve(this.sessionDir, "..", ".."))
+			: entry;
+		const persistedEntries = isRepoLocalSessionsDir(this.sessionDir)
+			? this.fileEntries.map((fileEntry) => sanitizeRepoLocalEntry(fileEntry, resolve(this.sessionDir, "..", "..")))
+			: this.fileEntries;
+
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
 			if (this.flushed) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+				appendFileSync(this.sessionFile, `${JSON.stringify(persistedEntry)}\n`);
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
@@ -900,7 +1082,7 @@ export class SessionManager {
 		if (!this.flushed) {
 			const fd = openSync(this.sessionFile, "wx");
 			try {
-				for (const e of this.fileEntries) {
+				for (const e of persistedEntries) {
 					writeFileSync(fd, `${JSON.stringify(e)}\n`);
 				}
 			} finally {
@@ -908,7 +1090,7 @@ export class SessionManager {
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendFileSync(this.sessionFile, `${JSON.stringify(persistedEntry)}\n`);
 		}
 	}
 
@@ -1271,18 +1453,25 @@ export class SessionManager {
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map
 		const pathWithoutLabels = path.filter((e) => e.type !== "label");
 
-		const newSessionId = createSessionId();
+		const repoLocal = this.persist && isRepoLocalSessionsDir(this.sessionDir);
+		const newSessionId = repoLocal ? createRepoLocalSessionId("fork") : createSessionId();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-		const newSessionFile = join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
+		const newSessionFile = repoLocal
+			? getRepoLocalNativeSessionFile(this.getSessionDir(), newSessionId)
+			: join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
 
 		const header: SessionHeader = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
 			id: newSessionId,
 			timestamp,
-			cwd: this.cwd,
-			parentSession: this.persist ? previousSessionFile : undefined,
+			cwd: repoLocal ? "." : this.cwd,
+			parentSession: this.persist
+				? repoLocal
+					? toRepoLocalSessionRef(this.sessionDir, previousSessionFile)
+					: previousSessionFile
+				: undefined,
 		};
 
 		// Collect labels for entries in the path
@@ -1295,6 +1484,9 @@ export class SessionManager {
 		}
 
 		if (this.persist) {
+			if (repoLocal) {
+				mkdirSync(dirname(newSessionFile), { recursive: true });
+			}
 			// Build label entries
 			const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
 			let parentId = lastEntryId;
@@ -1373,13 +1565,26 @@ export class SessionManager {
 	 */
 	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
 		const resolvedPath = resolvePath(path);
-		// Extract cwd from session header if possible, otherwise use process.cwd()
+		// Extract cwd from session header if possible, otherwise use process.cwd().
+		// Repo-local native sessions store cwd as "." to avoid absolute path leaks;
+		// resolve that against the repo root derived from .hutao/sessions.
 		const entries = loadEntriesFromFile(resolvedPath);
 		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
-		const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
-		// If no sessionDir provided, derive from file's parent directory
-		const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
-		return new SessionManager(cwd, dir, resolvedPath, true);
+		const providedDir = sessionDir ? normalizePath(sessionDir) : undefined;
+		const shouldUseProvidedDir =
+			providedDir && (!isRepoLocalSessionsDir(providedDir) || pathIsInside(providedDir, resolvedPath));
+		const derivedDir = shouldUseProvidedDir
+			? providedDir
+			: isRepoLocalNativeSessionFile(resolvedPath)
+				? resolve(resolvedPath, "..", "..")
+				: resolve(resolvedPath, "..");
+		const runtimeCwdFallback = isRepoLocalSessionsDir(derivedDir) ? resolve(derivedDir, "..", "..") : process.cwd();
+		let cwd =
+			cwdOverride ?? (header ? getSessionHeaderCwdForRuntime(header, runtimeCwdFallback) : runtimeCwdFallback);
+		if (isRepoLocalSessionsDir(derivedDir) && !pathIsInside(runtimeCwdFallback, cwd)) {
+			cwd = runtimeCwdFallback;
+		}
+		return new SessionManager(cwd, derivedDir, resolvedPath, true);
 	}
 
 	/**
@@ -1431,15 +1636,19 @@ export class SessionManager {
 		if (!existsSync(dir)) {
 			mkdirSync(dir, { recursive: true });
 		}
+		const repoLocal = isRepoLocalSessionsDir(dir);
 
 		// Create new session file with new ID but forked content
 		if (options?.id !== undefined) {
 			assertValidSessionId(options.id);
 		}
-		const newSessionId = options?.id ?? createSessionId();
+		const newSessionId = options?.id ?? (repoLocal ? createRepoLocalSessionId("fork") : createSessionId());
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-		const newSessionFile = join(dir, `${fileTimestamp}_${newSessionId}.jsonl`);
+		const newSessionFile = repoLocal
+			? getRepoLocalNativeSessionFile(dir, newSessionId)
+			: join(dir, `${fileTimestamp}_${newSessionId}.jsonl`);
+		if (repoLocal) mkdirSync(dirname(newSessionFile), { recursive: true });
 
 		// Write new header pointing to source as parent, with updated cwd
 		const newHeader: SessionHeader = {
@@ -1447,8 +1656,8 @@ export class SessionManager {
 			version: CURRENT_SESSION_VERSION,
 			id: newSessionId,
 			timestamp,
-			cwd: resolvedTargetCwd,
-			parentSession: resolvedSourcePath,
+			cwd: repoLocal ? "." : resolvedTargetCwd,
+			parentSession: repoLocal ? toRepoLocalSessionRef(dir, resolvedSourcePath) : resolvedSourcePath,
 		};
 		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
 
@@ -1470,13 +1679,29 @@ export class SessionManager {
 	 */
 	static async list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
-		const filterCwd = sessionDir !== undefined && dir !== getDefaultSessionDirPath(cwd);
+		const filterCwd =
+			!isRepoLocalSessionsDir(dir) && sessionDir !== undefined && dir !== getDefaultSessionDirPath(cwd);
 		const resolvedCwd = resolvePath(cwd);
 		const sessions = (await listSessionsFromDir(dir, onProgress)).filter(
 			(session) => !filterCwd || sessionCwdMatches(session.cwd, resolvedCwd),
 		);
 		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 		return sessions;
+	}
+
+	/**
+	 * List sessions for the resume picker. When Hutao uses a repo-local store,
+	 * include both repo-local sessions and legacy global sessions for this cwd.
+	 */
+	static async listForResume(
+		cwd: string,
+		sessionDir?: string,
+		onProgress?: SessionListProgress,
+	): Promise<SessionInfo[]> {
+		const primary = await SessionManager.list(cwd, sessionDir, onProgress);
+		if (!sessionDir || !isRepoLocalSessionsDir(sessionDir)) return primary;
+		const legacy = await SessionManager.list(cwd, undefined);
+		return uniqueSortedSessions([...primary, ...legacy]);
 	}
 
 	/**

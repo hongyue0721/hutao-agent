@@ -24,11 +24,16 @@ type HutaoTraceExtensionState = {
 	startupNoticeRepos: Set<string>;
 };
 
-async function createRecorder(ctx: ExtensionContext, state: HutaoTraceExtensionState): Promise<TraceRecorder | undefined> {
+async function createRecorder(
+	ctx: ExtensionContext,
+	state: HutaoTraceExtensionState,
+): Promise<TraceRecorder | undefined> {
 	const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
 	if (!repoRoot) return undefined;
 	const registry = new SessionRegistry(repoRoot);
-	const currentSessionId = registry.readCurrentSessionId();
+	const nativeSessionId = ctx.sessionManager.getSessionId();
+	const repoLocalNativeSessionId = /^(sess|fs)_/.test(nativeSessionId) ? nativeSessionId : undefined;
+	const currentSessionId = repoLocalNativeSessionId ?? registry.readCurrentSessionId();
 	if (
 		state.recorder &&
 		state.recorderRepoRoot === repoRoot &&
@@ -38,7 +43,7 @@ async function createRecorder(ctx: ExtensionContext, state: HutaoTraceExtensionS
 	}
 	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
 	state.recorderRepoRoot = repoRoot;
-	state.recorder = new TraceRecorder(repoRoot, currentMetadata);
+	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId);
 	await state.recorder.init();
 	return state.recorder;
 }

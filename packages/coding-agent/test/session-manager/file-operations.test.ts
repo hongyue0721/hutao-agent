@@ -1,8 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
+import {
+	findMostRecentSession,
+	getRepoLocalSessionDir,
+	loadEntriesFromFile,
+	SessionManager,
+} from "../../src/core/session-manager.ts";
 
 describe("loadEntriesFromFile", () => {
 	let tempDir: string;
@@ -203,6 +209,128 @@ describe("SessionManager custom flat session directory", () => {
 
 		const continuedA = SessionManager.continueRecent(projectA, tempDir);
 		expect(continuedA.getSessionFile()).toBe(sessionA);
+	});
+});
+
+describe("SessionManager repo-local Hutao native session directory", () => {
+	let tempDir: string;
+	let repo: string;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `session-test-${Date.now()}`);
+		repo = join(tempDir, "repo");
+		mkdirSync(repo, { recursive: true });
+		execFileSync("git", ["-C", repo, "init"], { stdio: "ignore" });
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	function appendRound(session: SessionManager, text: string): void {
+		session.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+		session.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: `reply to ${text}` }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+	}
+
+	it("stores native sessions under .hutao/sessions/<id>/native-session.jsonl without absolute cwd", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo);
+		expect(sessionDir).toBe(join(repo, ".hutao", "sessions"));
+		const session = SessionManager.create(repo, sessionDir);
+		appendRound(session, "repo local hello");
+
+		const sessionFile = session.getSessionFile();
+		expect(session.getSessionId().startsWith("sess_")).toBe(true);
+		expect(sessionFile).toBe(join(sessionDir!, session.getSessionId(), "native-session.jsonl"));
+		const header = JSON.parse(readFileSync(sessionFile!, "utf-8").split(/\r?\n/)[0]!);
+		expect(header.cwd).toBe(".");
+
+		const listed = await SessionManager.list(repo, sessionDir);
+		expect(listed.map((entry) => entry.path)).toEqual([sessionFile]);
+		expect(listed[0]?.firstMessage).toBe("repo local hello");
+
+		const opened = SessionManager.open(sessionFile!, sessionDir);
+		expect(opened.getCwd()).toBe(repo);
+		expect(opened.buildSessionContext().messages).toHaveLength(2);
+	});
+
+	it("forks repo-local native sessions into fs_ directories with repo-relative parent refs", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const session = SessionManager.create(repo, sessionDir);
+		appendRound(session, "root");
+		const originalFile = session.getSessionFile()!;
+		const forkedFile = session.createBranchedSession(session.getLeafId()!)!;
+		appendRound(session, "fork");
+
+		expect(session.getSessionId().startsWith("fs_")).toBe(true);
+		expect(forkedFile).toBe(join(sessionDir, session.getSessionId(), "native-session.jsonl"));
+		const header = JSON.parse(readFileSync(forkedFile, "utf-8").split(/\r?\n/)[0]!);
+		expect(header.cwd).toBe(".");
+		expect(header.parentSession).toBe(`.hutao/sessions/${originalFile.split(/[\\/]/).at(-2)}/native-session.jsonl`);
+
+		const listed = await SessionManager.list(repo, sessionDir);
+		expect(new Set(listed.map((entry) => entry.path))).toEqual(new Set([originalFile, forkedFile]));
+		expect(findMostRecentSession(sessionDir, repo)).toBe(forkedFile);
+	});
+
+	it("redacts repo-local native session absolute paths on disk while preserving in-memory context", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const session = SessionManager.create(repo, sessionDir);
+		const absoluteFile = join(repo, "src", "App.tsx");
+		session.appendMessage({ role: "user", content: `read ${absoluteFile}`, timestamp: Date.now() });
+		session.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: `I read ${absoluteFile}` }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		const onDisk = readFileSync(session.getSessionFile()!, "utf-8");
+		expect(onDisk).toContain("$" + "{REPO}");
+		expect(onDisk).not.toContain(repo);
+		expect((session.buildSessionContext().messages[0] as { content?: unknown })?.content).toContain(repo);
+		const opened = SessionManager.open(session.getSessionFile()!, sessionDir);
+		expect((opened.buildSessionContext().messages[0] as { content?: unknown })?.content).toContain(repo);
+	});
+
+	it("includes legacy current-folder sessions in repo-local resume lists without changing repo-local creation", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const repoLocal = SessionManager.create(repo, sessionDir);
+		appendRound(repoLocal, "repo local");
+		const legacy = SessionManager.create(repo);
+		appendRound(legacy, "legacy");
+
+		const listed = await SessionManager.listForResume(repo, sessionDir);
+		expect(new Set(listed.map((entry) => entry.path))).toEqual(
+			new Set([repoLocal.getSessionFile(), legacy.getSessionFile()]),
+		);
+		expect(SessionManager.create(repo, sessionDir).getSessionFile()).toContain(`${join(".hutao", "sessions")}`);
 	});
 });
 

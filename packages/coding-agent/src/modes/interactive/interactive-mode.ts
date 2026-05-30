@@ -4384,7 +4384,11 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 			const selector = new SessionSelectorComponent(
 				(onProgress) =>
-					SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
+					SessionManager.listForResume(
+						this.sessionManager.getCwd(),
+						this.sessionManager.getSessionDir(),
+						onProgress,
+					),
 				(onProgress) =>
 					this.sessionManager.usesDefaultSessionDir()
 						? SessionManager.listAll(onProgress)

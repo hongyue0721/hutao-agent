@@ -100,7 +100,8 @@ function normalizeLanguage(value: string | undefined): HutaoLanguage | undefined
 	const normalized = value?.trim().toLowerCase();
 	if (!normalized) return undefined;
 	if (normalized === "en" || normalized === "en-us" || normalized === "en_us") return "en";
-	if (normalized === "zh" || normalized === "zh-cn" || normalized === "zh_cn" || normalized === "zh-hans") return "zh-CN";
+	if (normalized === "zh" || normalized === "zh-cn" || normalized === "zh_cn" || normalized === "zh-hans")
+		return "zh-CN";
 	return undefined;
 }
 

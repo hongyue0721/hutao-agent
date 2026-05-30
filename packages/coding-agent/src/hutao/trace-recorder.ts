@@ -62,9 +62,9 @@ export class TraceRecorder {
 	private activePromptingId?: string;
 	private runs: Map<string, RunState>;
 
-	constructor(repoRoot: string, metadata?: HutaoSessionMetadata) {
+	constructor(repoRoot: string, metadata?: HutaoSessionMetadata, sessionId?: string) {
 		this.repoRoot = repoRoot;
-		this.sessionId = metadata?.id ?? createHutaoId("sess");
+		this.sessionId = metadata?.id ?? sessionId ?? createHutaoId("sess");
 		this.store = new EventStore(repoRoot, this.sessionId);
 		this.patches = new PatchStore(this.store.getSessionDir());
 		this.git = new GitAdapter(repoRoot);
@@ -202,11 +202,17 @@ export class TraceRecorder {
 				events.filter((entry) => entry.type === "commit_link").flatMap((entry) => stringArray(entry.edit_ids)),
 			);
 			const unlinkedEdits = events.filter(
-				(entry) => entry.type === "edit" && entry.session_id === this.sessionId && !existingLinkedEditIds.has(String(entry.id)),
+				(entry) =>
+					entry.type === "edit" &&
+					entry.session_id === this.sessionId &&
+					!existingLinkedEditIds.has(String(entry.id)),
 			);
 			const editIds = uniqueStrings([...unlinkedEdits.map((entry) => entry.id), ...producedEditIds]);
 			const runIds = uniqueStrings([...unlinkedEdits.map((entry) => entry.parent_run), run.id]);
-			const promptingIds = uniqueStrings([...unlinkedEdits.map((entry) => entry.parent_prompting), this.activePromptingId]);
+			const promptingIds = uniqueStrings([
+				...unlinkedEdits.map((entry) => entry.parent_prompting),
+				this.activePromptingId,
+			]);
 			this.store.append({
 				schema_version: HUTAO_SCHEMA_VERSION,
 				type: "commit_link",

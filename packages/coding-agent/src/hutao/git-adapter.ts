@@ -88,7 +88,14 @@ export class GitAdapter {
 
 	async getWorktreeSnapshot(): Promise<WorktreeSnapshot> {
 		const ignore = HutaoIgnore.load(this.cwd);
-		const result = await this.run(["status", "--porcelain=v1", "--untracked-files=all", "--", ".", ...ignore.toGitPathspecExcludes()]);
+		const result = await this.run([
+			"status",
+			"--porcelain=v1",
+			"--untracked-files=all",
+			"--",
+			".",
+			...ignore.toGitPathspecExcludes(),
+		]);
 		const files: Record<string, WorktreeFileState> = {};
 		for (const rawLine of result.stdout.split(/\r?\n/)) {
 			if (!rawLine.trim()) continue;
@@ -122,7 +129,8 @@ export class GitAdapter {
 		const ignore = HutaoIgnore.load(this.cwd);
 		const selectedFiles = files?.filter((file) => !ignore.isIgnored(file));
 		if (selectedFiles && selectedFiles.length === 0) return "";
-		const pathspec = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [".", ...ignore.toGitPathspecExcludes()];
+		const pathspec =
+			selectedFiles && selectedFiles.length > 0 ? selectedFiles : [".", ...ignore.toGitPathspecExcludes()];
 		const tracked = await this.run(["diff", "--binary", "--", ...pathspec]);
 		let patch = tracked.stdout;
 		const untrackedResult = await this.run([

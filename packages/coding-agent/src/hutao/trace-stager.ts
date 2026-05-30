@@ -31,18 +31,14 @@ function isTextTraceFile(path: string): boolean {
 }
 
 function hasAbsolutePathLeak(text: string): boolean {
-	return /[A-Za-z]:[\\/][^\s"'`<>)]*/.test(text) || /(?:^|\s)\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/.test(text);
+	return (
+		/[A-Za-z]:[\\/][^\s"'`<>)]*/.test(text) ||
+		/(?:^|\s)\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/.test(text)
+	);
 }
 
 async function listCandidateTraceFiles(git: GitAdapter): Promise<string[]> {
-	const result = await git.run([
-		"ls-files",
-		"--cached",
-		"--others",
-		"--exclude-standard",
-		"--",
-		...TRACE_PATHS,
-	]);
+	const result = await git.run(["ls-files", "--cached", "--others", "--exclude-standard", "--", ...TRACE_PATHS]);
 	if (!result.ok) return [];
 	return result.stdout
 		.split(/\r?\n/)
