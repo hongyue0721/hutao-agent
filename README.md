@@ -6,7 +6,7 @@
 
 `hutao-agent` 基于 [earendil-works/pi](https://github.com/earendil-works/pi) 改造而来。感谢 Pi 提供 coding agent CLI、TUI、tool runtime、extension system、session tree、统一 LLM provider 抽象等基础能力。
 
-也特别感谢 [zyf2007](https://github.com/zyf2007)（胡桃同学）提供的天才思路与产品方向启发，让 Hutao 从普通 coding agent 改造进一步走向 repo-local、Git-native、可追溯的 AI 开发上下文系统。
+也特别感谢 [zyf2007](https://github.com/zyf2007)（胡桃酱）提供的天才思路与产品方向启发，让 Hutao 从普通 coding agent 改造进一步走向 repo-local、Git-native、可追溯的 AI 开发上下文系统。
 
 Hutao 不是要替代 Pi 的 runtime，也不是要替代 Git。它是在 Pi agent harness 上增加一层 **repo-local、Git-native、可追溯的 AI coding trace / resume 系统**：把一次 AI 辅助开发中最关键的项目级事实保存到当前仓库内。
 
