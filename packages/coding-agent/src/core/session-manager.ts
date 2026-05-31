@@ -309,6 +309,27 @@ function uniqueSortedSessions(sessions: SessionInfo[]): SessionInfo[] {
 	return [...byPath.values()].sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
+export interface ResumeSessionSourceCounts {
+	repoLocal: number;
+	global: number;
+	rawOnly: number;
+}
+
+export function countResumeSessionSources(
+	sessions: SessionInfo[],
+	currentSessionFile?: string,
+): ResumeSessionSourceCounts {
+	const currentPath = currentSessionFile ? resolvePath(currentSessionFile) : undefined;
+	const counts: ResumeSessionSourceCounts = { repoLocal: 0, global: 0, rawOnly: 0 };
+	for (const session of sessions) {
+		if (currentPath && resolvePath(session.path) === currentPath) continue;
+		if (session.source === "repo-local") counts.repoLocal++;
+		else if (session.source === "raw-only") counts.rawOnly++;
+		else counts.global++;
+	}
+	return counts;
+}
+
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

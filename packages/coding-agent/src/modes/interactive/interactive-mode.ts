@@ -77,7 +77,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import { type SessionContext, SessionManager } from "../../core/session-manager.ts";
+import { countResumeSessionSources, type SessionContext, SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -544,16 +544,19 @@ export class InteractiveMode {
 					this.sessionManager.getCwd(),
 					this.sessionManager.getSessionDir(),
 				);
-				const currentFile = this.sessionManager.getSessionFile();
-				const currentPath = currentFile ? path.resolve(currentFile) : undefined;
-				const repoLocalSessions = sessions.filter(
-					(session) =>
-						session.source === "repo-local" && (!currentPath || path.resolve(session.path) !== currentPath),
-				);
-				if (repoLocalSessions.length === 0) return;
-				const suffix = repoLocalSessions.length === 1 ? "" : "s";
+				const counts = countResumeSessionSources(sessions, this.sessionManager.getSessionFile());
+				if (counts.repoLocal === 0 && counts.rawOnly === 0) return;
+				const parts: string[] = [];
+				if (counts.repoLocal > 0) {
+					const suffix = counts.repoLocal === 1 ? "" : "s";
+					parts.push(`${counts.repoLocal} repo-local resumable Hutao session${suffix}`);
+				}
+				if (counts.rawOnly > 0) {
+					const suffix = counts.rawOnly === 1 ? "" : "ies";
+					parts.push(`${counts.rawOnly} raw-only Hutao histor${counts.rawOnly === 1 ? "y" : suffix}`);
+				}
 				this.showStatus(
-					`Found ${repoLocalSessions.length} repo-local Hutao session${suffix}. Use /resume or /session to continue.`,
+					`Found ${parts.join(" and ")}. Use /resume for native sessions or /session to inspect history.`,
 				);
 			} catch {
 				// Startup notices should never block interactive mode.

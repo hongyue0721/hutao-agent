@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	countResumeSessionSources,
 	findMostRecentSession,
 	getRepoLocalSessionDir,
 	loadEntriesFromFile,
@@ -373,6 +374,58 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect((session.buildSessionContext().messages[0] as { content?: unknown })?.content).toContain(repo);
 		const opened = SessionManager.open(session.getSessionFile()!, sessionDir);
 		expect((opened.buildSessionContext().messages[0] as { content?: unknown })?.content).toContain(repo);
+	});
+
+	it("counts resume session sources while excluding the current session", () => {
+		const current = join(repo, ".hutao", "sessions", "sess_current", "native-session.jsonl");
+		const sessions = [
+			{
+				path: current,
+				id: "sess_current",
+				source: "repo-local" as const,
+				cwd: ".",
+				created: new Date(0),
+				modified: new Date(0),
+				messageCount: 1,
+				firstMessage: "current",
+				allMessagesText: "current",
+			},
+			{
+				path: join(repo, ".hutao", "sessions", "sess_other", "native-session.jsonl"),
+				id: "sess_other",
+				source: "repo-local" as const,
+				cwd: ".",
+				created: new Date(0),
+				modified: new Date(0),
+				messageCount: 1,
+				firstMessage: "other",
+				allMessagesText: "other",
+			},
+			{
+				path: join(repo, ".hutao", "sessions", "sess_raw", "session.json"),
+				id: "sess_raw",
+				source: "raw-only" as const,
+				cwd: ".",
+				created: new Date(0),
+				modified: new Date(0),
+				messageCount: 0,
+				firstMessage: "raw",
+				allMessagesText: "raw",
+			},
+			{
+				path: join(tempDir, "global.jsonl"),
+				id: "global",
+				source: "global" as const,
+				cwd: repo,
+				created: new Date(0),
+				modified: new Date(0),
+				messageCount: 1,
+				firstMessage: "global",
+				allMessagesText: "global",
+			},
+		];
+
+		expect(countResumeSessionSources(sessions, current)).toEqual({ repoLocal: 1, global: 1, rawOnly: 1 });
 	});
 
 	it("includes legacy current-folder sessions in repo-local resume lists without changing repo-local creation", async () => {
