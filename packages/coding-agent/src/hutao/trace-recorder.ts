@@ -65,10 +65,19 @@ function getNativeMessageRole(entry: SessionEntry): string | undefined {
 	return entry.type === "message" ? String(entry.message.role) : undefined;
 }
 
-function getNativeToolCallId(entry: SessionEntry): string | undefined {
-	if (entry.type !== "message") return undefined;
-	const message = entry.message as { toolCallId?: unknown };
-	return typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+function getNativeToolCallIds(entry: SessionEntry): string[] {
+	if (entry.type !== "message") return [];
+	const message = entry.message as { toolCallId?: unknown; content?: unknown };
+	const ids: string[] = [];
+	if (typeof message.toolCallId === "string") ids.push(message.toolCallId);
+	if (Array.isArray(message.content)) {
+		for (const block of message.content) {
+			if (!block || typeof block !== "object") continue;
+			const record = block as { type?: unknown; id?: unknown };
+			if (record.type === "toolCall" && typeof record.id === "string") ids.push(record.id);
+		}
+	}
+	return [...new Set(ids)];
 }
 
 function getNativeCustomType(entry: SessionEntry): string | undefined {
@@ -123,7 +132,8 @@ export class TraceRecorder {
 	async recordNativeEntryLink(entry: SessionEntry): Promise<void> {
 		const native = this.nativeContextProvider?.();
 		if (!native) return;
-		const toolCallId = getNativeToolCallId(entry);
+		const toolCallIds = getNativeToolCallIds(entry);
+		const toolCallId = toolCallIds[0];
 		this.store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "native_entry_link",
@@ -132,6 +142,7 @@ export class TraceRecorder {
 			related_prompting: this.activePromptingId,
 			related_run: toolCallId ? this.toolCallRunIds.get(toolCallId) : undefined,
 			tool_call_id: toolCallId,
+			tool_call_ids: toolCallIds,
 			native_session_id: native.sessionId,
 			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
 			native_entry_id: entry.id,

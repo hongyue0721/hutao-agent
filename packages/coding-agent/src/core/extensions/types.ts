@@ -333,6 +333,18 @@ export interface ExtensionContext {
  * Includes session control methods only safe in user-initiated commands.
  */
 export interface ExtensionCommandContext extends ExtensionContext {
+	/** Send a custom message to the session from a user-initiated command. */
+	sendMessage<T = unknown>(
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+	): void;
+
+	/** Send a user message from a user-initiated command. */
+	sendUserMessage(
+		content: string | (TextContent | ImageContent)[],
+		options?: { deliverAs?: "steer" | "followUp" },
+	): void;
+
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
 

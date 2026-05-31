@@ -1,6 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
+import { buildConversationHydration } from "./conversation-hydrator.ts";
+import { ConversationStore } from "./conversation-store.ts";
+import { renderConversationTimeline } from "./conversation-renderer.ts";
 import { CommitLinker } from "./commit-linker.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
@@ -234,6 +237,65 @@ async function resumeSession(sessionId: string, repoRoot: string, ctx: Extension
 	]);
 }
 
+async function runSessionConversationAction(
+	sessionIdPrefix: string,
+	repoRoot: string,
+	ctx: ExtensionCommandContext,
+	mode: "conversation" | "hydrate-preview" | "hydrate",
+	options: { requireQueueConfirmation?: boolean } = {},
+): Promise<void> {
+	const sessions = new SessionRegistry(repoRoot).readSessions();
+	const session = sessions.find((entry) => entry.id.startsWith(sessionIdPrefix));
+	if (!session) return notify(ctx, "Hutao conversation", [`Session not found: ${sessionIdPrefix}`], "warning");
+	const store = new ConversationStore(repoRoot);
+	const snapshot = store.load(session.id);
+	if (mode === "conversation") {
+		const lines = renderConversationTimeline(snapshot);
+		if (snapshot.status !== "complete") {
+			lines.push("", `raw evidence lines: ${store.readRawEvidenceLineCount(session.id)}`);
+			lines.push("This is incomplete/degraded history, not a fabricated full chat replay.");
+		}
+		return notify(ctx, `Conversation ${session.id}`, lines, snapshot.status === "complete" ? "info" : "warning");
+	}
+	const hydration = buildConversationHydration(snapshot);
+	if (mode === "hydrate-preview") {
+		return notify(
+			ctx,
+			`Hutao hydration preview ${session.id}`,
+			hydration.previewLines,
+			hydration.injectable ? "info" : "warning",
+		);
+	}
+	if (!hydration.injectable) {
+		const lines = [...hydration.previewLines, "", "Hydration was not queued because this history is incomplete."];
+		return notify(ctx, `Hutao hydration ${session.id}`, lines, "warning");
+	}
+	if (options.requireQueueConfirmation) {
+		const confirmed = await ctx.ui.confirm(
+			"Hutao hydration",
+			[
+				`Queue conversation context from ${session.id} for the next user turn?`,
+				"It will be delivered as untrusted custom context, not as system/developer instructions.",
+				"It will not immediately trigger a model response.",
+			].join("\n"),
+		);
+		if (!confirmed) return notify(ctx, `Hutao hydration ${session.id}`, ["Hydration queue cancelled."]);
+	}
+	ctx.sendMessage(hydration.message, { deliverAs: "nextTurn" });
+	appendNativeTraceEntry(ctx, "hutao_conversation_hydration_queued", {
+		session_id: session.id,
+		included_entry_ids: hydration.details.included_entry_ids,
+		omitted_entry_count: hydration.details.omitted_entry_count,
+		created_at: new Date().toISOString(),
+	});
+	return notify(ctx, `Hutao hydration ${session.id}`, [
+		"Conversation context queued for the next user turn.",
+		"It will be delivered as a custom nextTurn message, not as system/developer instructions.",
+		`included entries: ${hydration.details.included_entry_ids.length}`,
+		`omitted eligible entries: ${hydration.details.omitted_entry_count}`,
+	]);
+}
+
 async function runCoordinatedFork(
 	repoRoot: string,
 	ctx: ExtensionCommandContext,
@@ -297,6 +359,9 @@ async function resumeFromEdit(edit: HutaoEvent, repoRoot: string, ctx: Extension
 async function runSessionAction(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
 	const choice = await selectAction(ctx, repoRoot, "session.action.title", [
 		{ id: "viewDetails", labelKey: "session.action.viewDetails" },
+		{ id: "viewConversation", labelKey: "session.action.viewConversation" },
+		{ id: "previewHydration", labelKey: "session.action.previewHydration" },
+		{ id: "queueHydration", labelKey: "session.action.queueHydration" },
 		{ id: "resume", labelKey: "session.action.resume" },
 		{ id: "viewPromptings", labelKey: "session.action.viewPromptings" },
 		{ id: "viewRuns", labelKey: "session.action.viewRuns" },
@@ -308,6 +373,10 @@ async function runSessionAction(sessionId: string, repoRoot: string, ctx: Extens
 		{ id: "applyFinalSnapshot", labelKey: "session.action.applyFinalSnapshot" },
 	]);
 	if (choice === "viewDetails") return sessionCommand(sessionId, ctx);
+	if (choice === "viewConversation") return runSessionConversationAction(sessionId, repoRoot, ctx, "conversation");
+	if (choice === "previewHydration") return runSessionConversationAction(sessionId, repoRoot, ctx, "hydrate-preview");
+	if (choice === "queueHydration")
+		return runSessionConversationAction(sessionId, repoRoot, ctx, "hydrate", { requireQueueConfirmation: true });
 	if (choice === "resume") return resumeSession(sessionId, repoRoot, ctx);
 	if (choice === "viewPromptings") return promptingCommand(`--session ${sessionId}`, ctx);
 	if (choice === "viewRuns") return runCommand(`--session ${sessionId}`, ctx);
@@ -381,6 +450,20 @@ export async function sessionCommand(args: string, ctx: ExtensionCommandContext)
 	const sessions = new SessionRegistry(repoRoot).readSessions();
 	const events = readEvents(repoRoot);
 	const query = args.trim();
+	const parts = query.split(/\s+/).filter(Boolean);
+	if (parts.includes("--conversation") || parts.includes("--hydrate-preview") || parts.includes("--hydrate")) {
+		const mode = parts.includes("--conversation")
+			? "conversation"
+			: parts.includes("--hydrate-preview")
+				? "hydrate-preview"
+				: "hydrate";
+		const sessionIdPrefix = parts.find((part) => !part.startsWith("--"));
+		if (!sessionIdPrefix) {
+			const flag = mode === "conversation" ? "--conversation" : mode === "hydrate" ? "--hydrate" : "--hydrate-preview";
+			return notify(ctx, "Hutao conversation", [`Usage: /session <id> ${flag}`], "warning");
+		}
+		return runSessionConversationAction(sessionIdPrefix, repoRoot, ctx, mode);
+	}
 	if (!query) {
 		const selected = await selectItem(ctx, t(repoRoot, "session.select.title"), sessions, (session) =>
 			sessionSummary(session, events),
@@ -410,6 +493,8 @@ export async function sessionCommand(args: string, ctx: ExtensionCommandContext)
 		`last_git_head: ${session.current_git_head_at_last_write ?? "unknown"}`,
 		`updated_at: ${session.updated_at}`,
 		`summary: ${session.summary || ""}`,
+		"",
+		`conversation: /session ${session.id} --conversation`,
 		"",
 	];
 	pushEventList(lines, "Promptings", promptings, (event) => `${shortId(event.id)} ${eventTitle(event)}`);

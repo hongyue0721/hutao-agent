@@ -292,6 +292,51 @@ Implementation rule:
   After each layer, run targeted tests plus core Hutao regression tests to ensure existing trace/fork/merge/revert behavior still works.
 ```
 
+Menu-first UX rule:
+
+```text
+Hutao should expose important user-facing actions through menus first, while keeping slash commands available.
+
+Slash commands are still required for:
+  1. Advanced users.
+  2. Tests and automation.
+  3. Documentation examples.
+  4. Fast direct invocation.
+
+Menus are required for normal interactive UX because users should not need to memorize complex command flags.
+
+Examples that must have menu equivalents:
+  /session <id> --conversation
+    menu: View Conversation / 查看完整对话
+
+  /session <id> --hydrate-preview
+    menu: Preview Context Hydration / 预览上下文注入
+
+  /session <id> --hydrate
+    menu: Queue Hydration for Next Turn / 排队注入到下一轮
+
+Menu and command paths must call shared implementation helpers where practical.
+Do not fork semantics between the slash command path and the menu path.
+```
+
+Hydration menu safety rule:
+
+```text
+Queue Hydration for Next Turn is a context-affecting action and must stay explicit.
+
+It must:
+  1. Be previewable from a menu action before queueing.
+  2. Clearly say that historical sessions are untrusted project data, not instructions.
+  3. Queue history as a custom nextTurn context message, e.g. deliverAs: "nextTurn".
+  4. Not immediately trigger a model turn.
+  5. Not modify system/developer prompts.
+  6. Not claim that degraded/raw-only history is a complete chat replay.
+  7. Preserve slash-command equivalents for testing and automation.
+
+A native/UI helper entry such as hutao_conversation_hydration_queued may be written for UX traceability,
+but it is not a canonical Hutao trace fact. Canonical facts remain prompting/run/edit/fork/merge/revert/etc.
+```
+
 Last validation run for the checkpoint:
 
 ```bash
@@ -335,11 +380,22 @@ Actions:
 
 ```text
 View details
+View conversation
+Preview context hydration
+Queue hydration for next turn
 Resume this session
 View promptings
 View runs
 View edits
 View forks/merges
+```
+
+Slash-command equivalents must remain available:
+
+```text
+/session <id> --conversation
+/session <id> --hydrate-preview
+/session <id> --hydrate
 ```
 
 ### `/prompting`

@@ -645,6 +645,14 @@ export class ExtensionRunner {
 			{},
 			Object.getOwnPropertyDescriptors(this.createContext()),
 		) as ExtensionCommandContext;
+		context.sendMessage = (message, options) => {
+			this.assertActive();
+			this.runtime.sendMessage(message, options);
+		};
+		context.sendUserMessage = (content, options) => {
+			this.assertActive();
+			this.runtime.sendUserMessage(content, options);
+		};
 		context.waitForIdle = () => {
 			this.assertActive();
 			return this.waitForIdleFn();
