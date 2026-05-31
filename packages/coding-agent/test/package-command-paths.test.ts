@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ENV_AGENT_DIR, PACKAGE_NAME, VERSION } from "../src/config.ts";
+import { APP_NAME, ENV_AGENT_DIR, PACKAGE_NAME, VERSION } from "../src/config.ts";
 import { main } from "../src/main.ts";
 
 describe("package commands", () => {
@@ -13,12 +13,23 @@ describe("package commands", () => {
 	let originalCwd: string;
 	let originalAgentDir: string | undefined;
 	let originalPiPackageDir: string | undefined;
+	let originalHutaoEnableVersionCheck: string | undefined;
+	let originalHutaoLatestVersionUrl: string | undefined;
 	let originalExitCode: typeof process.exitCode;
 	let originalExecPath: string;
 
 	function getNewerPatchVersion(): string {
 		const [major = "0", minor = "0", patch = "0"] = VERSION.split(".");
 		return `${major}.${minor}.${Number.parseInt(patch, 10) + 1}`;
+	}
+
+	function enableVersionCheckForTest(): void {
+		process.env.HUTAO_ENABLE_VERSION_CHECK = "1";
+		process.env.HUTAO_LATEST_VERSION_URL = "https://updates.example.test/latest.json";
+	}
+
+	function getRenamedPackageNameForTest(): string {
+		return `${PACKAGE_NAME}-renamed-test`;
 	}
 
 	beforeEach(() => {
@@ -33,6 +44,8 @@ describe("package commands", () => {
 		originalCwd = process.cwd();
 		originalAgentDir = process.env[ENV_AGENT_DIR];
 		originalPiPackageDir = process.env.PI_PACKAGE_DIR;
+		originalHutaoEnableVersionCheck = process.env.HUTAO_ENABLE_VERSION_CHECK;
+		originalHutaoLatestVersionUrl = process.env.HUTAO_LATEST_VERSION_URL;
 		originalExitCode = process.exitCode;
 		originalExecPath = process.execPath;
 		process.exitCode = undefined;
@@ -53,6 +66,16 @@ describe("package commands", () => {
 			delete process.env.PI_PACKAGE_DIR;
 		} else {
 			process.env.PI_PACKAGE_DIR = originalPiPackageDir;
+		}
+		if (originalHutaoEnableVersionCheck === undefined) {
+			delete process.env.HUTAO_ENABLE_VERSION_CHECK;
+		} else {
+			process.env.HUTAO_ENABLE_VERSION_CHECK = originalHutaoEnableVersionCheck;
+		}
+		if (originalHutaoLatestVersionUrl === undefined) {
+			delete process.env.HUTAO_LATEST_VERSION_URL;
+		} else {
+			process.env.HUTAO_LATEST_VERSION_URL = originalHutaoLatestVersionUrl;
 		}
 		Object.defineProperty(process, "execPath", { value: originalExecPath, configurable: true });
 		rmSync(tempDir, { recursive: true, force: true });
@@ -94,7 +117,7 @@ describe("package commands", () => {
 
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stdout).toContain("Usage:");
-			expect(stdout).toContain("pi install <source> [-l]");
+			expect(stdout).toContain(`${APP_NAME} install <source> [-l]`);
 			expect(errorSpy).not.toHaveBeenCalled();
 			expect(process.exitCode).toBeUndefined();
 		} finally {
@@ -111,7 +134,7 @@ describe("package commands", () => {
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain('Unknown option --unknown for "install".');
-			expect(stderr).toContain('Use "pi --help" or "pi install <source> [-l]".');
+			expect(stderr).toContain(`Use "${APP_NAME} --help" or "${APP_NAME} install <source> [-l]".`);
 			expect(process.exitCode).toBe(1);
 		} finally {
 			errorSpy.mockRestore();
@@ -126,7 +149,7 @@ describe("package commands", () => {
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain("Missing install source.");
-			expect(stderr).toContain("Usage: pi install <source> [-l]");
+			expect(stderr).toContain(`Usage: ${APP_NAME} install <source> [-l]`);
 			expect(stderr).not.toContain("at ");
 			expect(process.exitCode).toBe(1);
 		} finally {
@@ -206,6 +229,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
+		enableVersionCheckForTest();
 		const fetchMock = vi.fn(async () => Response.json({ version: getNewerPatchVersion() }));
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -252,7 +276,8 @@ else {
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
+		const activePackageName = getRenamedPackageNameForTest();
+		enableVersionCheckForTest();
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => Response.json({ packageName: activePackageName, version: "0.73.0" })),
@@ -305,7 +330,8 @@ if(args.includes("install")) process.exit(23);
 			value: join(selfPackageDir, "dist", "cli.js"),
 			configurable: true,
 		});
-		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
+		const activePackageName = getRenamedPackageNameForTest();
+		enableVersionCheckForTest();
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => Response.json({ packageName: activePackageName, version: "0.73.0" })),
@@ -320,7 +346,7 @@ if(args.includes("install")) process.exit(23);
 			expect(process.exitCode).toBe(1);
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stdout).not.toContain(`Updated pi`);
+			expect(stdout).not.toContain(`Updated ${APP_NAME}`);
 			expect(stderr).toContain("exited with code 23");
 			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
 			expect(recordedCalls).toEqual([
