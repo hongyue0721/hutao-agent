@@ -3047,3 +3047,375 @@ agent 做了哪些 run
 一句话结束：
 
 > hutao-agent 要让仓库不只保存代码，也保存这个项目被人和 AI 一步步做出来的上下文。
+
+---
+
+## 31. 压缩交接记录 / 2026-05-31 full-suite repair handoff
+
+本节是一次对话压缩前的执行交接记录，用于让下一个 agent 继续工作时快速恢复上下文。它不替代前文产品规则；如果本节与前文规则冲突，仍以前文规则为准。
+
+### 31.1 最近已完成并推送的 repo-local native resume 工作
+
+已推送到 `origin/main` 的最近提交：
+
+```text
+223ecab test(hutao): validate repo-local resume across clone paths
+9d582a3 test(hutao): verify repo-local resume persists to hutao
+c52cb63 feat(hutao): improve repo-local resume startup notice
+57ecdec feat(hutao): label raw-only resume sessions
+c7e8748 feat(hutao): add conversation hydration menu flow
+```
+
+这些提交完成了 Phase B repo-local/native resume 基础验收：
+
+```text
+1. resume/session selector 显示 [repo-local] / [global] / [raw-only]。
+2. raw-only Hutao history 可见但不能伪装成 native chat resume。
+3. 启动时发现 .hutao/sessions 后提示 repo-local resumable sessions 与 raw-only history。
+4. SessionManager.open(repo-local native-session.jsonl) 后继续 append 会写回同一个 .hutao/sessions/<id>/native-session.jsonl。
+5. clone/copy 到新路径后，repo-local native session 能 list/open/continue，${REPO} hydrate 到当前 clone path，磁盘不泄漏旧 repo root。
+```
+
+已通过并推送前验证过的 targeted tests：
+
+```bash
+npx vitest run \
+  packages/coding-agent/test/session-manager/file-operations.test.ts \
+  packages/coding-agent/test/session-selector-path-delete.test.ts \
+  packages/coding-agent/test/hutao/core.test.ts \
+  packages/coding-agent/test/hutao/integration.test.ts \
+  packages/coding-agent/test/extensions-runner.test.ts
+```
+
+当时结果：
+
+```text
+5 test files passed
+103 tests passed
+npm run build passed
+```
+
+### 31.2 当前验收环境与副作用
+
+Windows 工作区：
+
+```text
+D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+```
+
+WSL fresh clone：
+
+```text
+/home/hongyue/hutao-agent-wsl-test
+```
+
+WSL 环境：
+
+```text
+Ubuntu 26.04 LTS
+node v24.16.0 via nvm
+npm 11.13.0
+```
+
+注意：验收命令产生过工作区副作用，下一轮修复前应先确认/清理。
+
+Windows 工作区当前有验收副作用：
+
+```text
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts
+9 个 Hutao 相关文件被 npm run check / biome --write 格式化
+```
+
+WSL clone 中也有类似副作用：
+
+```text
+npm run check 自动格式化 9 个文件
+npm run build 重新生成 packages/ai/src/models.generated.ts 和 image-models.generated.ts
+```
+
+如果开始正式修复，建议先在 WSL clone 中建立干净分支：
+
+```bash
+cd /home/hongyue/hutao-agent-wsl-test
+git fetch origin
+git reset --hard origin/main
+git clean -fd
+git checkout -B fix/full-test-suite-wsl
+npm install --ignore-scripts
+npm run build
+```
+
+不要把 generated model 更新或 biome 格式化副作用混进不相关修复提交；格式化如需提交，应单独做 `chore(format)`。
+
+### 31.3 WSL 全量测试现状
+
+在 WSL fresh clone 上执行顺序：
+
+```bash
+npm install --ignore-scripts
+npm run check
+npm run build
+npm test
+```
+
+`npm run check` 结果：
+
+```text
+passed
+但会执行 biome check --write 并格式化 9 个文件
+```
+
+`npm run build` 结果：
+
+```text
+passed
+但会重新生成 packages/ai/src/models.generated.ts 与 image-models.generated.ts
+```
+
+`npm test` 在 build 后结果：
+
+```text
+Test Files: 7 failed, 122 passed, 6 skipped
+Tests:      14 failed, 1338 passed, 44 skipped
+```
+
+全量测试尚未绿，不能对外声称 full suite passed。
+
+### 31.4 WSL 剩余 14 个失败分类
+
+#### A. `clipboard-image.test.ts` — WSL clipboard 测试隔离问题
+
+失败数：2
+
+```text
+readClipboardImage > Non-Wayland: uses clipboard
+readClipboardImage > Non-Wayland: returns null when clipboard has no image
+```
+
+原因：
+
+```text
+测试传入 readClipboardImage({ platform: "linux", env: {} }) 试图模拟普通 Linux，
+但 isWSL() 仍会读取 /proc/version 并识别当前进程在 WSL 内，
+于是代码走 wl-paste/xclip/PowerShell fallback，而测试期待 native clipboard path。
+```
+
+修复方向不要简单 skip。建议让 clipboard 读取逻辑支持可测试的环境隔离，例如：
+
+```text
+1. 给 readClipboardImage options 增加 isWslOverride / commandRunner / nativeClipboard 之类依赖注入；或
+2. 把 isWSL(env) 调整为当 options.env 显式传入时不再读取真实 /proc/version；或
+3. 抽出 ClipboardEnvironmentDetector，单测可稳定模拟 Wayland/X11/WSL/non-Wayland。
+```
+
+目标是可扩展地覆盖：
+
+```text
+Wayland Linux
+X11 Linux
+WSL
+普通 non-Wayland Linux
+Windows/macOS native clipboard
+```
+
+#### B. `package-command-paths.test.ts` — `pi` -> `hutao` rename / self-update 策略漂移
+
+失败数：6
+
+明显失败：
+
+```text
+测试期待: pi install <source> [-l]
+实际输出: hutao install <source> [-l]
+```
+
+还有 self-update 相关失败：
+
+```text
+uses the current package name when the update check omits packageName
+installs the active package name from the update check during self-update
+fails self-update when renamed npm package installation fails
+```
+
+修复方向不要只硬编码字符串。应先读并统一：
+
+```text
+src/config.ts
+src/main.ts
+src/utils/version-check.ts
+test/package-command-paths.test.ts
+```
+
+原则：
+
+```text
+1. 测试应使用 APP_NAME / PACKAGE_NAME / ENV_AGENT_DIR 等常量，而不是散落 "pi" / "hutao"。
+2. 明确 Hutao 当前 self-update 策略：是否默认禁用 version check、是否允许 active packageName 替换、rename uninstall old package 是否仍是产品需求。
+3. 如果产品策略是 Hutao 不沿用 Pi 的远端 update check，则测试应改成 Hutao 策略。
+4. 如果实现逻辑和产品策略不一致，再修实现，不要只改测试。
+```
+
+#### C. `theme-export.test.ts` 与 `theme-picker.test.ts` — 旧 env var 遗留
+
+失败数：3
+
+原因：
+
+```text
+测试写入 PI_CODING_AGENT_DIR，但 Hutao 当前 config 使用 APP_NAME 推导 env var，
+即 ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`，当前应为 HUTAO_CODING_AGENT_DIR。
+```
+
+修复方向：
+
+```text
+1. 测试 import ENV_AGENT_DIR，不要硬编码 PI_CODING_AGENT_DIR 或 HUTAO_CODING_AGENT_DIR。
+2. theme custom dir 相关实现继续通过 getAgentDir()/getCustomThemesDir() 获取路径。
+3. 确认 setRegisteredThemes / env stub / cache 行为在测试间正确 reset。
+```
+
+#### D. `agent-session-runtime.test.ts` — fork 返回值 shape 更新
+
+失败数：1
+
+原因：
+
+```text
+runtime.fork(...) 现在返回 { cancelled, selectedText, sessionFile }，
+测试仍期待 { cancelled, selectedText }。
+```
+
+修复方向：
+
+```text
+1. 不要用宽松 expect.anything 糊过去。
+2. 显式验证 sessionFile 存在且等于/指向新的 fork session file。
+3. 同时验证 old session file 未被继续写入，new fork session file 被使用。
+4. 如果 sessionFile 是新的 API 契约，确认类型定义和调用方均一致。
+```
+
+#### E. `package-manager.test.ts` — GitHub URL 测试 timeout / 外部依赖
+
+失败数：1
+
+失败测试：
+
+```text
+DefaultPackageManager > source parsing > should recognize github URLs without git: prefix
+```
+
+原因：
+
+```text
+测试处理 nonexistent GitHub repo，WSL 中超时 30000ms。
+```
+
+修复方向：
+
+```text
+1. 不要依赖真实 GitHub 网络或不存在仓库的超时行为。
+2. 将 git clone / package resolution 抽为可 mock 的 command runner，或在测试里使用本地 bare git repo/file URL。
+3. 目标是验证 URL parsing，而不是验证 GitHub 网络失败速度。
+```
+
+#### F. `2791-fswatch-error-crash.test.ts` — FSWatcher 时序/环境敏感
+
+失败数：1
+
+原因：
+
+```text
+子进程报 no FSWatcher found among active handles。
+```
+
+修复方向：
+
+```text
+1. 不要简单扩大 timeout。
+2. 让测试显式等待 watcher ready 信号，或让 theme watcher/FSWatcher 可注入。
+3. 如果在 noThemes 或测试环境不创建 watcher，应调整测试 setup 明确启用 watcher。
+4. 目标是稳定验证 "FSWatcher error event 不会 crash process"。
+```
+
+### 31.5 下一轮修复策略
+
+用户已明确要求：
+
+```text
+开启全量修复，不要最小化收口，而是可迭代、可拓展的修复。
+```
+
+下一轮应该按类别修复，而不是一次性硬改所有断言。
+
+建议分支：
+
+```bash
+git checkout -B fix/full-test-suite-wsl
+```
+
+建议提交拆分：
+
+```text
+test(cli): align package command tests with hutao naming constants
+test(theme): use agent dir env constants for custom themes
+test(clipboard): isolate WSL clipboard detection
+test(runtime): assert fork sessionFile result
+test(package-manager): make github URL parsing deterministic
+test(watcher): stabilize fswatch regression
+chore(format): apply biome formatting
+```
+
+如果需要改产品代码，则使用 `fix(...)` 并单独提交，例如：
+
+```text
+fix(clipboard): make WSL detection injectable for tests
+fix(package-manager): avoid network-dependent github URL parsing test path
+```
+
+### 31.6 下一轮最小验收序列
+
+每修一类先跑对应文件，例如：
+
+```bash
+cd /home/hongyue/hutao-agent-wsl-test
+npm test -- packages/coding-agent/test/package-command-paths.test.ts
+npm test -- packages/coding-agent/test/theme-export.test.ts packages/coding-agent/test/theme-picker.test.ts
+npm test -- packages/coding-agent/test/clipboard-image.test.ts
+npm test -- packages/coding-agent/test/suite/agent-session-runtime.test.ts
+npm test -- packages/coding-agent/test/package-manager.test.ts
+npm test -- packages/coding-agent/test/suite/regressions/2791-fswatch-error-crash.test.ts
+```
+
+阶段性跑：
+
+```bash
+npm run check
+npm run build
+npm test
+```
+
+最后还要重新跑 Hutao 相关 targeted tests，防止全量修复破坏 repo-local/native resume：
+
+```bash
+npx vitest run \
+  packages/coding-agent/test/session-manager/file-operations.test.ts \
+  packages/coding-agent/test/session-selector-path-delete.test.ts \
+  packages/coding-agent/test/hutao/core.test.ts \
+  packages/coding-agent/test/hutao/integration.test.ts \
+  packages/coding-agent/test/extensions-runner.test.ts
+```
+
+### 31.7 汇报原则
+
+后续汇报必须区分：
+
+```text
+1. Targeted Hutao tests passed
+2. npm run check passed
+3. npm run build passed
+4. full npm test passed
+5. AGENTS.md roadmap completed
+```
+
+不要把 targeted tests passed 说成 full suite passed。不要把 Phase B 完成说成 AGENTS.md 全部完成。

@@ -642,3 +642,134 @@ rg "SessionSelectorComponent" packages
 rg "listForResume" packages
 ```
 
+---
+
+## Compaction handoff — 2026-05-31 full-suite repair
+
+This section is a short handoff for the next agent after conversation compaction. It summarizes the current state; it does not override `AGENTS.md`.
+
+### Recently completed and pushed
+
+Latest pushed commits:
+
+```text
+223ecab test(hutao): validate repo-local resume across clone paths
+9d582a3 test(hutao): verify repo-local resume persists to hutao
+c52cb63 feat(hutao): improve repo-local resume startup notice
+57ecdec feat(hutao): label raw-only resume sessions
+c7e8748 feat(hutao): add conversation hydration menu flow
+```
+
+Completed Phase B repo-local/native resume work:
+
+```text
+1. Resume/session selector labels [repo-local], [global], and [raw-only].
+2. raw-only Hutao history is visible but cannot be resumed as native chat.
+3. Startup notice distinguishes repo-local resumable sessions from raw-only history.
+4. Opening a repo-local native session and appending writes back to .hutao/sessions/<id>/native-session.jsonl.
+5. Clone/copy path validation proves ${REPO} hydration uses the new clone path and does not leak old repo roots.
+```
+
+Targeted tests passed before push:
+
+```bash
+npx vitest run \
+  packages/coding-agent/test/session-manager/file-operations.test.ts \
+  packages/coding-agent/test/session-selector-path-delete.test.ts \
+  packages/coding-agent/test/hutao/core.test.ts \
+  packages/coding-agent/test/hutao/integration.test.ts \
+  packages/coding-agent/test/extensions-runner.test.ts
+```
+
+Result:
+
+```text
+5 test files passed
+103 tests passed
+npm run build passed
+```
+
+### WSL validation state
+
+WSL test clone:
+
+```text
+/home/hongyue/hutao-agent-wsl-test
+```
+
+Environment:
+
+```text
+Ubuntu 26.04 LTS
+node v24.16.0 via nvm
+npm 11.13.0
+```
+
+`npm run check` passes but runs `biome check --write` and formats 9 files.
+
+`npm run build` passes but regenerates:
+
+```text
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts
+```
+
+After build, WSL `npm test` is not green yet:
+
+```text
+Test Files: 7 failed, 122 passed, 6 skipped
+Tests:      14 failed, 1338 passed, 44 skipped
+```
+
+### Remaining full-suite failures to repair
+
+```text
+1. clipboard-image.test.ts: WSL detection reads /proc/version even when env is {}, so Non-Wayland tests are not isolated.
+2. package-command-paths.test.ts: legacy pi expectations and self-update strategy drift after hutao rename.
+3. theme-export.test.ts/theme-picker.test.ts: tests use PI_CODING_AGENT_DIR instead of ENV_AGENT_DIR / HUTAO_CODING_AGENT_DIR.
+4. agent-session-runtime.test.ts: fork() now returns sessionFile; test should assert the new file explicitly.
+5. package-manager.test.ts: GitHub URL parsing test times out through real nonexistent network path.
+6. 2791-fswatch-error-crash.test.ts: FSWatcher regression test is timing/environment sensitive and cannot find active watcher.
+```
+
+### Next repair strategy
+
+User requested full-suite repair that is iterative and extensible, not a minimal closeout.
+
+Recommended clean WSL baseline:
+
+```bash
+cd /home/hongyue/hutao-agent-wsl-test
+git fetch origin
+git reset --hard origin/main
+git clean -fd
+git checkout -B fix/full-test-suite-wsl
+npm install --ignore-scripts
+npm run build
+```
+
+Repair principles:
+
+```text
+1. Prefer APP_NAME / PACKAGE_NAME / ENV_AGENT_DIR constants over hard-coded pi/hutao strings.
+2. Make tests deterministic instead of relying on real GitHub/network/timeouts.
+3. Make clipboard environment detection injectable or explicitly isolated for WSL tests.
+4. For fork(), assert sessionFile as part of the API contract instead of ignoring it.
+5. Stabilize FSWatcher regression with explicit watcher-ready synchronization or injectable watcher setup.
+6. Keep generated model updates and biome formatting in separate commits if they must be committed.
+```
+
+Suggested commit split:
+
+```text
+test(cli): align package command tests with hutao naming constants
+test(theme): use agent dir env constants for custom themes
+test(clipboard): isolate WSL clipboard detection
+test(runtime): assert fork sessionFile result
+test(package-manager): make github URL parsing deterministic
+test(watcher): stabilize fswatch regression
+chore(format): apply biome formatting
+```
+
+Do not claim full suite is green until WSL `npm test` passes after `npm run build`, and do not claim AGENTS.md is complete. Only Phase B repo-local/native resume is complete.
+
