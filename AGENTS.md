@@ -3805,3 +3805,330 @@ hutao
 ```text
 已实际验收 Windows 产生的 Hutao 会话可在该 Linux/WSL 环境中 resume 并继续写回。
 ```
+
+---
+
+## 35. 最新交接记录 / Windows-to-WSL portability acceptance passed
+
+本节更新 34 节中“真实 Windows -> Linux/WSL clone/resume/writeback 端到端人工验收尚未完成”的状态。该验收已经在本轮通过，并且发现并修复了一个真实 portability bug。
+
+### 35.1 验收流程
+
+本轮执行了一个无网络、无真实 provider 的临时 demo 验收：
+
+```text
+1. Windows 侧创建临时 git repo。
+2. Windows 侧用 built dist SessionManager 创建 repo-local Hutao native session。
+3. 用户与 assistant 消息中包含 Windows repo 下的绝对文件路径。
+4. 验证 native-session.jsonl 磁盘内容不包含 Windows repo root。
+5. 验证 native-session.jsonl 使用 ${REPO}/src/hello.ts 这种 repo-relative POSIX placeholder。
+6. git commit demo repo。
+7. 将 repo 复制为 Linux/WSL clone 路径。
+8. WSL 侧用 Node + built dist SessionManager 调用 listForResume。
+9. WSL 侧打开 repo-local session。
+10. 验证 ${REPO}/src/hello.ts 被 hydrate 成 WSL clone 当前路径。
+11. WSL 侧继续 append user/assistant messages。
+12. 验证新消息写回 clone 的 .hutao/sessions/<id>/native-session.jsonl。
+13. 验证写回后的 native-session.jsonl 仍不泄漏 Windows repo root 或 WSL clone absolute root。
+```
+
+WSL 验收输出：
+
+```json
+{
+  "ok": true,
+  "source": "repo-local",
+  "sessionId": "sess_019e7d64-218a-714f-aea1-145a278ee2e4",
+  "cloneRepo": "/mnt/c/Users/MSI-/AppData/Local/Temp/hutao-portability-1780220174571/linux-clone",
+  "sessionFile": "/mnt/c/Users/MSI-/AppData/Local/Temp/hutao-portability-1780220174571/linux-clone/.hutao/sessions/sess_019e7d64-218a-714f-aea1-145a278ee2e4/native-session.jsonl",
+  "messageCount": 4
+}
+```
+
+### 35.2 Bug found and fixed
+
+第一次验收失败时发现：
+
+```text
+${REPO} 被替换成 WSL clone root，但 Windows repo-relative suffix 保留了 backslash。
+```
+
+失败形态：
+
+```text
+/mnt/c/.../linux-clone\src\hello.ts
+```
+
+根因：
+
+```text
+sanitizeRepoLocalText 只替换 repo root 为 ${REPO}，没有把 repo-relative suffix canonicalize 为 POSIX slash。
+hydrateRepoLocalText 只简单 replace ${REPO}，没有把 suffix 按当前平台/base dir 重新 resolve。
+```
+
+修复：
+
+```text
+1. sanitizeRepoLocalText 写盘时把 repo-relative suffix 规范成 POSIX：${REPO}/src/hello.ts。
+2. hydrateRepoLocalText 读回时将 ${REPO}/src/hello.ts 解析为当前 clone 平台路径。
+3. session-manager/file-operations.test.ts 增强断言，禁止 ${REPO}\src\... 这种 Windows suffix 写入 native session。
+```
+
+### 35.3 当前准确表述
+
+现在允许说：
+
+```text
+在本轮验证的 Windows -> WSL 临时 demo 中，Windows 创建的 repo-local Hutao native session 可以在 WSL clone 路径中 listForResume、open、hydrate 当前路径、继续写回 .hutao，并且不泄漏旧 Windows repo root 或新 WSL clone absolute root。
+```
+
+仍然不要过度说：
+
+```text
+所有 Linux 发行版、所有 shell、所有文件系统组合都 100% 保证。
+历史 Windows shell 命令会自动转译为 Linux 命令。
+```
+
+---
+
+## 36. 设计补充 / Linux 与 Windows 文件路径转译模型
+
+本节记录 Hutao 跨平台路径转译的核心设计，方便压缩上下文后继续保持一致。
+
+### 36.1 不做绝对路径互译
+
+不要把路径转译理解成：
+
+```text
+Windows absolute path -> Linux absolute path
+C:\Users\Alice\project\src\a.ts -> /home/alice/project/src/a.ts
+```
+
+这会非常脆弱：
+
+```text
+1. 用户名变化会坏。
+2. 盘符变化会坏。
+3. WSL mount 配置变化会坏。
+4. clone 到不同目录会坏。
+5. Linux 发行版 / shell / 文件系统差异会坏。
+```
+
+正确模型是三段式：
+
+```text
+absolute path -> repo-relative POSIX canonical path -> current-platform resolved path
+```
+
+示例：
+
+```text
+Windows:
+C:\repo\src\a.ts
+        ↓
+src/a.ts
+        ↓
+Linux / WSL:
+/home/me/repo/src/a.ts
+```
+
+中间的 `src/a.ts` 才是 `.hutao` 应保存的稳定事实。
+
+### 36.2 三层路径职责
+
+Hutao 内部必须区分三层路径：
+
+```text
+1. canonical path
+   - 写入 .hutao 的事实路径。
+   - 必须是 repo-relative POSIX slash。
+   - 示例：src/auth.ts、packages/api/index.ts。
+
+2. resolved path
+   - 当前机器运行时可访问的真实路径。
+   - 由当前 repo root + canonical path 计算。
+   - Windows 示例：C:\repo\src\auth.ts。
+   - Linux 示例：/home/me/repo/src/auth.ts。
+
+3. display path
+   - 展示给用户看的路径。
+   - 可以根据 UI 需要缩短、加颜色、显示为 repo://src/auth.ts 或 src/auth.ts。
+```
+
+不要把 resolved path 写进 `.hutao` 当事实来源。
+
+### 36.3 写入规则：absolute -> canonical
+
+当 agent 在 Windows 上看到：
+
+```text
+C:\Users\MSI-\project\src\hello.ts
+```
+
+repo root 是：
+
+```text
+C:\Users\MSI-\project
+```
+
+写入 `.hutao` 前必须变成：
+
+```text
+src/hello.ts
+```
+
+如果是在 raw/native conversation 文本里，则写成：
+
+```text
+${REPO}/src/hello.ts
+```
+
+注意：`${REPO}` 后面的 repo-relative suffix 必须是 POSIX slash：
+
+```text
+正确：${REPO}/src/hello.ts
+错误：${REPO}\src\hello.ts
+```
+
+### 36.4 读取规则：canonical -> current platform resolved
+
+Linux/WSL clone 后 repo root 可能是：
+
+```text
+/mnt/c/Users/MSI-/project-clone
+```
+
+读取：
+
+```text
+${REPO}/src/hello.ts
+```
+
+hydrate 成当前机器路径：
+
+```text
+/mnt/c/Users/MSI-/project-clone/src/hello.ts
+```
+
+Windows 读取同一个 canonical path，则 hydrate 成：
+
+```text
+C:\Users\MSI-\project-clone\src\hello.ts
+```
+
+同一个 `.hutao` 事实路径，在不同平台 resolve 成不同本地路径。
+
+### 36.5 推荐 PathMapper 形态
+
+推荐抽象：
+
+```ts
+type CanonicalPath = string; // repo-relative POSIX, e.g. "src/hello.ts"
+
+class PathMapper {
+	constructor(private repoRoot: string) {}
+
+	toCanonical(inputPath: string): CanonicalPath | null {
+		const absolute = path.resolve(this.repoRoot, inputPath);
+		const relative = path.relative(this.repoRoot, absolute);
+
+		if (relative.startsWith("..") || path.isAbsolute(relative)) {
+			return null; // outside repo
+		}
+
+		return relative.replace(/\/g, "/");
+	}
+
+	toResolved(canonical: CanonicalPath): string {
+		return path.resolve(this.repoRoot, canonical);
+	}
+
+	redactText(text: string): string {
+		const rootVariants = [path.resolve(this.repoRoot), path.resolve(this.repoRoot).replace(/\/g, "/")];
+		let result = text;
+
+		for (const root of rootVariants) {
+			const escaped = escapeRegExp(root);
+			result = result.replace(new RegExp(`${escaped}([\\/][^\s"'<>)]*)?`, "g"), (_match, suffix = "") => {
+				const rel = suffix.replace(/^[\/]+/, "").replace(/\/g, "/");
+				return rel ? `\${REPO}/${rel}` : "\${REPO}";
+			});
+		}
+
+		return result;
+	}
+
+	hydrateText(text: string): string {
+		return text.replace(/\$\{REPO\}([\/][^\s"'<>)]*)?/g, (_match, suffix = "") => {
+			const rel = suffix.replace(/^[\/]+/, "");
+			return path.resolve(this.repoRoot, rel);
+		});
+	}
+}
+```
+
+核心规则：
+
+```ts
+relative.replace(/\/g, "/")       // 写入 .hutao 时统一 POSIX
+path.resolve(repoRoot, canonical)  // 读取时按当前平台解析
+```
+
+### 36.6 WSL 特殊情况
+
+WSL 中 Windows 磁盘路径可能是：
+
+```text
+/mnt/c/Users/MSI-/project
+```
+
+Windows 中同一个位置可能是：
+
+```text
+C:\Users\MSI-\project
+```
+
+Hutao 不应保存这两者之间的映射关系。正确做法仍然是：
+
+```text
+Windows 写入：${REPO}/src/hello.ts
+WSL 读取：当前 clone root + src/hello.ts
+```
+
+这样 repo 在以下任意位置都能恢复：
+
+```text
+C:\Users\MSI-\project
+/mnt/c/Users/MSI-/project
+/home/user/project
+/tmp/project
+```
+
+### 36.7 本轮实际修复案例
+
+真实 Windows -> WSL 验收第一次失败时出现：
+
+```text
+/mnt/c/.../linux-clone\src\hello.ts
+```
+
+原因是写盘内容等价于：
+
+```text
+${REPO}\src\hello.ts
+```
+
+修复后写盘为：
+
+```text
+${REPO}/src/hello.ts
+```
+
+读取时再按当前平台 resolve：
+
+```text
+Windows -> C:\...\repo\src\hello.ts
+WSL/Linux -> /mnt/c/.../repo/src/hello.ts
+```
+
+这就是 Hutao 应遵守的跨平台路径转译模型。

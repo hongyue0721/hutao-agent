@@ -987,3 +987,114 @@ Next hard acceptance flow:
 6. Continue the session.
 7. Confirm new trace/native data writes back to that clone's .hutao.
 ```
+
+---
+
+## Compaction handoff update — Windows-to-WSL portability acceptance passed
+
+The previously missing Windows -> Linux/WSL clone/resume/writeback acceptance has now been run with a temporary demo repo and no real provider/API.
+
+Acceptance flow completed:
+
+```text
+Windows temporary git repo created
+Windows built dist SessionManager created repo-local .hutao native session
+native-session.jsonl stored repo paths as ${REPO}/src/hello.ts
+repo committed and copied to a WSL-visible clone path
+WSL Node opened the repo-local session via listForResume + open
+${REPO}/src/hello.ts hydrated to the WSL clone path
+WSL appended another user/assistant turn
+new messages persisted back to the clone's .hutao native-session.jsonl
+no old Windows repo root or new WSL clone absolute root leaked to disk
+```
+
+Bug found during acceptance:
+
+```text
+Initial hydration produced /mnt/.../linux-clone\src\hello.ts because the stored suffix after ${REPO} kept Windows backslashes.
+```
+
+Fix made:
+
+```text
+sanitizeRepoLocalText now writes repo-relative suffixes as POSIX after ${REPO}.
+hydrateRepoLocalText now resolves ${REPO}/relative/path against the current clone root.
+session-manager/file-operations.test.ts asserts ${REPO}/src/... is stored and ${REPO}\src\... is not.
+```
+
+Current accurate claim:
+
+```text
+The validated Windows -> WSL repo-local native session portability flow works for create, commit/copy, listForResume, open, hydrate, continue, and writeback.
+```
+
+Still not claimed:
+
+```text
+Automatic translation of historical Windows shell commands to Linux shell commands.
+Universal guarantee for every Linux distro / shell / filesystem combination.
+```
+
+---
+
+## Compaction handoff update — cross-platform path translation model
+
+Important design model for Windows/Linux path translation:
+
+```text
+Do not translate Windows absolute paths directly into Linux absolute paths.
+Translate absolute path -> repo-relative POSIX canonical path -> current-platform resolved path.
+```
+
+Correct flow:
+
+```text
+Windows absolute:
+C:\repo\src\a.ts
+
+canonical stored in .hutao:
+src/a.ts
+or in text:
+${REPO}/src/a.ts
+
+Linux/WSL resolved:
+/home/me/repo/src/a.ts
+```
+
+Hutao must distinguish:
+
+```text
+canonical path: repo-relative POSIX path stored in .hutao
+resolved path: current machine path computed from current repo root
+DISPLAY path: UI-only path shown to user
+```
+
+Never store resolved absolute paths as Hutao facts.
+
+Critical rule:
+
+```text
+Correct: ${REPO}/src/hello.ts
+Wrong:   ${REPO}\src\hello.ts
+```
+
+The Windows -> WSL acceptance initially failed with:
+
+```text
+/mnt/c/.../linux-clone\src\hello.ts
+```
+
+The fix was:
+
+```text
+1. sanitizeRepoLocalText writes repo-relative suffixes after ${REPO} using POSIX slash.
+2. hydrateRepoLocalText resolves ${REPO}/relative/path against the current clone root.
+```
+
+Boundaries:
+
+```text
+Hutao restores project-level AI development context and paths.
+Hutao does not auto-translate historical Windows shell commands into Linux shell commands.
+Raw terminal output is evidence text, not executable instruction.
+```

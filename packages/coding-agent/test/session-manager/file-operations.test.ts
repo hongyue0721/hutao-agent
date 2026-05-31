@@ -341,7 +341,8 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		const originalSessionId = session.getSessionId();
 		const originalSessionFile = session.getSessionFile()!;
 		const originalOnDisk = readFileSync(originalSessionFile, "utf-8");
-		expect(originalOnDisk).toContain("$" + "{REPO}");
+		expect(originalOnDisk).toContain("$" + "{REPO}/src/old-path.ts");
+		expect(originalOnDisk).not.toContain("$" + "{REPO}\\src\\old-path.ts");
 		expect(originalOnDisk).not.toContain(repo);
 
 		const clonedRepo = join(tempDir, "cloned", "project");
@@ -371,7 +372,8 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		appendRound(opened, "continued in cloned repo");
 		const clonedOnDisk = readFileSync(clonedSessionFile, "utf-8");
 		expect(clonedOnDisk).toContain("continued in cloned repo");
-		expect(clonedOnDisk).toContain("$" + "{REPO}");
+		expect(clonedOnDisk).toContain("$" + "{REPO}/src/old-path.ts");
+		expect(clonedOnDisk).not.toContain("$" + "{REPO}\\src\\old-path.ts");
 		expect(clonedOnDisk).not.toContain(repo);
 		expect(clonedOnDisk).not.toContain(clonedRepo);
 	});
@@ -438,7 +440,8 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		});
 
 		const onDisk = readFileSync(session.getSessionFile()!, "utf-8");
-		expect(onDisk).toContain("$" + "{REPO}");
+		expect(onDisk).toContain("$" + "{REPO}/src/App.tsx");
+		expect(onDisk).not.toContain("$" + "{REPO}\\src\\App.tsx");
 		expect(onDisk).not.toContain(repo);
 		expect((session.buildSessionContext().messages[0] as { content?: unknown })?.content).toContain(repo);
 		const opened = SessionManager.open(session.getSessionFile()!, sessionDir);
