@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
-import { buildConversationHydration } from "./conversation-hydrator.ts";
-import { ConversationStore } from "./conversation-store.ts";
-import { renderConversationTimeline } from "./conversation-renderer.ts";
 import { CommitLinker } from "./commit-linker.ts";
+import { buildConversationHydration } from "./conversation-hydrator.ts";
+import { renderConversationTimeline } from "./conversation-renderer.ts";
+import { ConversationStore } from "./conversation-store.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
 import { GitAdapter } from "./git-adapter.ts";
@@ -459,7 +459,8 @@ export async function sessionCommand(args: string, ctx: ExtensionCommandContext)
 				: "hydrate";
 		const sessionIdPrefix = parts.find((part) => !part.startsWith("--"));
 		if (!sessionIdPrefix) {
-			const flag = mode === "conversation" ? "--conversation" : mode === "hydrate" ? "--hydrate" : "--hydrate-preview";
+			const flag =
+				mode === "conversation" ? "--conversation" : mode === "hydrate" ? "--hydrate" : "--hydrate-preview";
 			return notify(ctx, "Hutao conversation", [`Usage: /session <id> ${flag}`], "warning");
 		}
 		return runSessionConversationAction(sessionIdPrefix, repoRoot, ctx, mode);

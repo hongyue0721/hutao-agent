@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getRepoLocalSessionDir, SessionManager } from "../../src/core/session-manager.ts";
-import { buildConversationHydration } from "../../src/hutao/conversation-hydrator.ts";
-import { ConversationStore } from "../../src/hutao/conversation-store.ts";
-import { renderConversationTimeline } from "../../src/hutao/conversation-renderer.ts";
 import { MemoryArmedContinuationStore } from "../../src/hutao/continuation-store.ts";
+import { buildConversationHydration } from "../../src/hutao/conversation-hydrator.ts";
+import { renderConversationTimeline } from "../../src/hutao/conversation-renderer.ts";
+import { ConversationStore } from "../../src/hutao/conversation-store.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION } from "../../src/hutao/event-store.ts";
 import { HutaoForkCoordinator } from "../../src/hutao/fork-coordinator.ts";
 import { ForkTargetResolver } from "../../src/hutao/fork-target-resolver.ts";
@@ -418,7 +418,11 @@ describe("ConversationStore", () => {
 			leafEntryId: nativeSession.getLeafId(),
 		}));
 		await recorder.init();
-		const olderEntryId = nativeSession.appendMessage({ role: "user", content: "older context", timestamp: Date.now() });
+		const olderEntryId = nativeSession.appendMessage({
+			role: "user",
+			content: "older context",
+			timestamp: Date.now(),
+		});
 		await recorder.recordNativeEntryLink(nativeSession.getEntry(olderEntryId)!);
 		const secretEntryId = nativeSession.appendMessage({
 			role: "user",
@@ -444,7 +448,11 @@ describe("ConversationStore", () => {
 			timestamp: Date.now(),
 		} as any);
 		await recorder.recordNativeEntryLink(nativeSession.getEntry(assistantEntryId)!);
-		const safeEntryId = nativeSession.appendMessage({ role: "user", content: "new safe text", timestamp: Date.now() });
+		const safeEntryId = nativeSession.appendMessage({
+			role: "user",
+			content: "new safe text",
+			timestamp: Date.now(),
+		});
 		await recorder.recordNativeEntryLink(nativeSession.getEntry(safeEntryId)!);
 		const snapshot = new ConversationStore(repo).load(nativeSession.getSessionId());
 		const hydration = buildConversationHydration(snapshot, { maxEntries: 3, maxEntryChars: 80 });

@@ -57,7 +57,9 @@ function relatedToolCallIds(entry: SessionEntry): string[] {
 	const direct = stringValue(message.toolCallId);
 	const content = Array.isArray(message.content) ? message.content : [];
 	const fromBlocks = content
-		.map((block) => (block && typeof block === "object" ? stringValue((block as Record<string, unknown>).id) : undefined))
+		.map((block) =>
+			block && typeof block === "object" ? stringValue((block as Record<string, unknown>).id) : undefined,
+		)
 		.filter((id): id is string => Boolean(id));
 	return unique([direct, ...fromBlocks]);
 }
@@ -68,9 +70,10 @@ function linksForEntry(entry: SessionEntry, events: HutaoEvent[]): ConversationT
 	const runIds = unique([
 		...links.map((event) => stringValue(event.related_run)),
 		...events
-			.filter((event) =>
-				(event.type === "run_started" || event.type === "run_finished") &&
-				toolCallIds.includes(String(event.tool_call_id ?? "")),
+			.filter(
+				(event) =>
+					(event.type === "run_started" || event.type === "run_finished") &&
+					toolCallIds.includes(String(event.tool_call_id ?? "")),
 			)
 			.map((event) => stringValue(event.id)),
 	]);
@@ -78,8 +81,8 @@ function linksForEntry(entry: SessionEntry, events: HutaoEvent[]): ConversationT
 		...links.map((event) => stringValue(event.related_prompting)),
 		...runIds.flatMap((runId) =>
 			events
-				.filter((event) =>
-					(event.type === "run_started" || event.type === "run_finished") && String(event.id) === runId,
+				.filter(
+					(event) => (event.type === "run_started" || event.type === "run_finished") && String(event.id) === runId,
 				)
 				.map((event) => stringValue(event.parent_prompting)),
 		),

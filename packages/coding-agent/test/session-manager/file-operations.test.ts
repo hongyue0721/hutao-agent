@@ -362,13 +362,11 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		const resumedMessages = opened.buildSessionContext().messages;
 		const expectedClonedPath = join(clonedRepo, "src", "old-path.ts");
 		expect((resumedMessages[0] as { content?: unknown })?.content).toBe(`read ${expectedClonedPath}`);
-		expect(
-			((resumedMessages[1] as { content?: Array<{ text?: string }> })?.content?.[0]?.text),
-		).toBe(`reply to read ${expectedClonedPath}`);
+		expect((resumedMessages[1] as { content?: Array<{ text?: string }> })?.content?.[0]?.text).toBe(
+			`reply to read ${expectedClonedPath}`,
+		);
 		expect((resumedMessages[0] as { content?: unknown })?.content).not.toContain(repo);
-		expect(
-			((resumedMessages[1] as { content?: Array<{ text?: string }> })?.content?.[0]?.text),
-		).not.toContain(repo);
+		expect((resumedMessages[1] as { content?: Array<{ text?: string }> })?.content?.[0]?.text).not.toContain(repo);
 
 		appendRound(opened, "continued in cloned repo");
 		const clonedOnDisk = readFileSync(clonedSessionFile, "utf-8");
