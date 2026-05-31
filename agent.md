@@ -1230,3 +1230,167 @@ Full custom TUI app-style UI is complete.
 All merge/revert conflicts can be auto-resolved.
 All Phase D/E/F goals are complete.
 ```
+
+---
+
+## Compaction handoff update — test-blog clone has trace facts but no native resume
+
+A real user workflow exposed an important repo-local resume bug.
+
+Observed workflow:
+
+```text
+1. User created a project on server 152.42.205.229 in /root/test.
+2. The repo was pushed to https://github.com/hongyue0721/test-blog on branch master.
+3. The repo was cloned locally to D:/OneDrive/Desktop/blog-test/test-blog.
+4. Local Hutao did not show a resumable repo-local native chat session.
+```
+
+Read-only verification performed from this repository:
+
+```bash
+ssh root@152.42.205.229 'cd ~/test && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print'
+cd /d/OneDrive/Desktop/blog-test/test-blog && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print
+hutao --version
+```
+
+Verified facts:
+
+```text
+Remote /root/test:
+- branch master at 1100816 chore: update Hutao trace after initial push
+- origin/master is also 1100816
+- .hutao trace facts exist: manifest, refs, index, session.json, events.jsonl, raw.jsonl, patches/*.patch
+- no .hutao/sessions/<id>/native-session.jsonl exists
+- working tree currently has M .hutao/manifest.json from later inspection/use
+
+Local D:/OneDrive/Desktop/blog-test/test-blog:
+- branch master at 1100816 and tracking origin/master
+- same .hutao trace facts exist
+- no .hutao/sessions/<id>/native-session.jsonl exists
+- working tree has modified .hutao index/manifest/refs/events from local Hutao inspection/use
+
+Local hutao binary:
+- /c/Users/MSI-/AppData/Roaming/npm/hutao
+- hutao --version => 0.77.0
+```
+
+Root cause conclusion:
+
+```text
+This is not a Git branch problem and not a local Hutao version problem.
+The project contains Hutao trace facts only, but lacks repo-local native conversation state.
+Therefore clone/open can show trace/raw history through .hutao facts, but cannot appear as a full native chat session in the resume picker.
+```
+
+Important distinction:
+
+```text
+Having .hutao/events.jsonl + raw.jsonl + patches + session.json is not enough for chat-level resume.
+Chat-level repo-local resume requires .hutao/sessions/<session_id>/native-session.jsonl or an equivalent native conversation state file.
+Raw-only history must remain degraded/incomplete; do not fabricate user/assistant/tool native entries from raw summaries.
+```
+
+Next implementation task:
+
+```text
+Fix Hutao new-session/runtime write path so that normal interactive Hutao sessions created outside the hutao-agent development repo also create and maintain:
+.hutao/sessions/<session_id>/native-session.jsonl
+```
+
+Acceptance criteria for the fix:
+
+```text
+1. Start a brand-new Git repo on a server or temp path.
+2. Run hutao and complete at least two normal promptings with assistant/tool/edit activity.
+3. Commit and push code + .hutao.
+4. Clone on another machine/path.
+5. Verify .hutao/sessions/<id>/native-session.jsonl exists in the pushed repo.
+6. Verify hutao resume/session picker lists a repo-local resumable session, not only raw-only/degraded trace.
+7. Open it and see native conversation entries.
+8. Continue input and verify new entries write back to that clone's .hutao native-session.jsonl.
+```
+
+Do not claim clone-after-push chat resume is fully working until this exact scenario is fixed and verified.
+
+---
+
+## Compaction handoff update — test-blog clone has trace facts but no native resume
+
+A real user workflow exposed an important repo-local resume bug.
+
+Observed workflow:
+
+```text
+1. User created a project on server 152.42.205.229 in /root/test.
+2. The repo was pushed to https://github.com/hongyue0721/test-blog on branch master.
+3. The repo was cloned locally to D:/OneDrive/Desktop/blog-test/test-blog.
+4. Local Hutao did not show a resumable repo-local native chat session.
+```
+
+Read-only verification performed from this repository:
+
+```bash
+ssh root@152.42.205.229 'cd ~/test && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print'
+cd /d/OneDrive/Desktop/blog-test/test-blog && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print
+hutao --version
+```
+
+Verified facts:
+
+```text
+Remote /root/test:
+- branch master at 1100816 chore: update Hutao trace after initial push
+- origin/master is also 1100816
+- .hutao trace facts exist: manifest, refs, index, session.json, events.jsonl, raw.jsonl, patches/*.patch
+- no .hutao/sessions/<id>/native-session.jsonl exists
+- working tree currently has M .hutao/manifest.json from later inspection/use
+
+Local D:/OneDrive/Desktop/blog-test/test-blog:
+- branch master at 1100816 and tracking origin/master
+- same .hutao trace facts exist
+- no .hutao/sessions/<id>/native-session.jsonl exists
+- working tree has modified .hutao index/manifest/refs/events from local Hutao inspection/use
+
+Local hutao binary:
+- /c/Users/MSI-/AppData/Roaming/npm/hutao
+- hutao --version => 0.77.0
+```
+
+Root cause conclusion:
+
+```text
+This is not a Git branch problem and not a local Hutao version problem.
+The project contains Hutao trace facts only, but lacks repo-local native conversation state.
+Therefore clone/open can show trace/raw history through .hutao facts, but cannot appear as a full native chat session in the resume picker.
+```
+
+Important distinction:
+
+```text
+Having .hutao/events.jsonl + raw.jsonl + patches + session.json is not enough for chat-level resume.
+Chat-level repo-local resume requires .hutao/sessions/<session_id>/native-session.jsonl or an equivalent native conversation state file.
+Raw-only history must remain degraded/incomplete; do not fabricate user/assistant/tool native entries from raw summaries.
+```
+
+Next implementation task:
+
+```text
+Fix Hutao new-session/runtime write path so that normal interactive Hutao sessions created outside the hutao-agent development repo also create and maintain:
+.hutao/sessions/<session_id>/native-session.jsonl
+```
+
+Acceptance criteria for the fix:
+
+```text
+1. Start a brand-new Git repo on a server or temp path.
+2. Run hutao and complete at least two normal promptings with assistant/tool/edit activity.
+3. Commit and push code + .hutao.
+4. Clone on another machine/path.
+5. Verify .hutao/sessions/<id>/native-session.jsonl exists in the pushed repo.
+6. Verify hutao resume/session picker lists a repo-local resumable session, not only raw-only/degraded trace.
+7. Open it and see native conversation entries.
+8. Continue input and verify new entries write back to that clone's .hutao native-session.jsonl.
+```
+
+Do not claim clone-after-push chat resume is fully working until this exact scenario is fixed and verified.
