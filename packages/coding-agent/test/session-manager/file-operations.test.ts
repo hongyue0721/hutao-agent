@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -331,6 +331,51 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(listed[0]?.source).toBe("repo-local");
 		expect(listed[0]?.firstMessage).toBe("initial repo-local turn");
 		expect(listed[0]?.allMessagesText).toContain("continued after resume");
+	});
+
+	it("resumes repo-local native sessions after clone path changes without leaking the old repo root", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const session = SessionManager.create(repo, sessionDir);
+		const oldRepoFile = join(repo, "src", "old-path.ts");
+		appendRound(session, `read ${oldRepoFile}`);
+		const originalSessionId = session.getSessionId();
+		const originalSessionFile = session.getSessionFile()!;
+		const originalOnDisk = readFileSync(originalSessionFile, "utf-8");
+		expect(originalOnDisk).toContain("$" + "{REPO}");
+		expect(originalOnDisk).not.toContain(repo);
+
+		const clonedRepo = join(tempDir, "cloned", "project");
+		cpSync(repo, clonedRepo, { recursive: true });
+		const clonedSessionDir = getRepoLocalSessionDir(clonedRepo)!;
+		const clonedSessionFile = join(clonedSessionDir, originalSessionId, "native-session.jsonl");
+
+		const listed = await SessionManager.listForResume(clonedRepo, clonedSessionDir);
+		const repoLocal = listed.find((entry) => entry.id === originalSessionId);
+		expect(repoLocal?.source).toBe("repo-local");
+		expect(repoLocal?.path).toBe(clonedSessionFile);
+
+		const opened = SessionManager.open(clonedSessionFile);
+		expect(opened.getSessionId()).toBe(originalSessionId);
+		expect(opened.getSessionFile()).toBe(clonedSessionFile);
+		expect(opened.getSessionDir()).toBe(clonedSessionDir);
+		expect(opened.getCwd()).toBe(clonedRepo);
+		const resumedMessages = opened.buildSessionContext().messages;
+		const expectedClonedPath = join(clonedRepo, "src", "old-path.ts");
+		expect((resumedMessages[0] as { content?: unknown })?.content).toBe(`read ${expectedClonedPath}`);
+		expect(
+			((resumedMessages[1] as { content?: Array<{ text?: string }> })?.content?.[0]?.text),
+		).toBe(`reply to read ${expectedClonedPath}`);
+		expect((resumedMessages[0] as { content?: unknown })?.content).not.toContain(repo);
+		expect(
+			((resumedMessages[1] as { content?: Array<{ text?: string }> })?.content?.[0]?.text),
+		).not.toContain(repo);
+
+		appendRound(opened, "continued in cloned repo");
+		const clonedOnDisk = readFileSync(clonedSessionFile, "utf-8");
+		expect(clonedOnDisk).toContain("continued in cloned repo");
+		expect(clonedOnDisk).toContain("$" + "{REPO}");
+		expect(clonedOnDisk).not.toContain(repo);
+		expect(clonedOnDisk).not.toContain(clonedRepo);
 	});
 
 	it("forks repo-local native sessions into fs_ directories with repo-relative parent refs", async () => {
