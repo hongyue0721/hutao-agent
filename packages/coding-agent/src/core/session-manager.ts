@@ -176,7 +176,7 @@ export interface SessionContext {
 	model: { provider: string; modelId: string } | null;
 }
 
-export type SessionSource = "repo-local" | "global";
+export type SessionSource = "repo-local" | "global" | "raw-only";
 
 export interface SessionInfo {
 	path: string;
@@ -221,6 +221,9 @@ function createSessionId(): string {
 const HUTAO_DIR_NAME = ".hutao";
 const HUTAO_SESSIONS_DIR_NAME = "sessions";
 const HUTAO_NATIVE_SESSION_FILE = "native-session.jsonl";
+const HUTAO_SESSION_METADATA_FILE = "session.json";
+const HUTAO_EVENTS_FILE = "events.jsonl";
+const HUTAO_RAW_FILE = "raw.jsonl";
 const REPO_PLACEHOLDER = "$" + "{REPO}";
 
 function createRepoLocalSessionId(kind: "session" | "fork" = "session"): string {
@@ -912,6 +915,82 @@ async function listSessionsFromDir(
 		// Return empty list on error
 	}
 
+	return sessions;
+}
+
+async function listRawOnlyHutaoSessions(sessionDir: string): Promise<SessionInfo[]> {
+	const sessions: SessionInfo[] = [];
+	if (!existsSync(sessionDir) || !isRepoLocalSessionsDir(sessionDir)) return sessions;
+	try {
+		const entries = await readdir(sessionDir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const dir = join(sessionDir, entry.name);
+			const nativeFile = join(dir, HUTAO_NATIVE_SESSION_FILE);
+			if (existsSync(nativeFile)) continue;
+			const metadataPath = join(dir, HUTAO_SESSION_METADATA_FILE);
+			const eventsPath = join(dir, HUTAO_EVENTS_FILE);
+			const rawPath = join(dir, HUTAO_RAW_FILE);
+			const markerPath = [metadataPath, eventsPath, rawPath].find((path) => existsSync(path));
+			if (!markerPath) continue;
+
+			let id = entry.name;
+			let title = "Incomplete Hutao history / raw evidence only";
+			let summary = "";
+			let created = new Date(0);
+			let modified = (await stat(markerPath)).mtime;
+			try {
+				if (existsSync(metadataPath)) {
+					const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+						id?: string;
+						title?: string;
+						summary?: string;
+						created_at?: string;
+						updated_at?: string;
+					};
+					id = metadata.id || id;
+					title = metadata.title || title;
+					summary = metadata.summary || "";
+					const createdTime = metadata.created_at ? new Date(metadata.created_at) : undefined;
+					const updatedTime = metadata.updated_at ? new Date(metadata.updated_at) : undefined;
+					if (createdTime && !Number.isNaN(createdTime.getTime())) created = createdTime;
+					if (updatedTime && !Number.isNaN(updatedTime.getTime())) modified = updatedTime;
+				}
+			} catch {
+				// Raw-only entries are degraded evidence; tolerate malformed metadata.
+			}
+
+			const evidenceText: string[] = [title, summary];
+			let promptingCount = 0;
+			if (existsSync(eventsPath)) {
+				try {
+					for (const line of (await readFile(eventsPath, "utf8")).split(/\r?\n/)) {
+						if (!line.trim()) continue;
+						try {
+							const event = JSON.parse(line) as { type?: string; text?: string; summary?: string };
+							if (event.type === "prompting") promptingCount++;
+							if (event.text) evidenceText.push(event.text);
+							if (event.summary) evidenceText.push(event.summary);
+						} catch {}
+					}
+				} catch {}
+			}
+
+			sessions.push({
+				path: markerPath,
+				id,
+				source: "raw-only",
+				cwd: ".",
+				created,
+				modified,
+				messageCount: promptingCount,
+				firstMessage: title,
+				allMessagesText: evidenceText.filter(Boolean).join(" "),
+			});
+		}
+	} catch {
+		return sessions;
+	}
 	return sessions;
 }
 
@@ -1747,8 +1826,9 @@ export class SessionManager {
 	): Promise<SessionInfo[]> {
 		const primary = await SessionManager.list(cwd, sessionDir, onProgress);
 		if (!sessionDir || !isRepoLocalSessionsDir(sessionDir)) return primary;
+		const rawOnly = await listRawOnlyHutaoSessions(sessionDir);
 		const legacy = await SessionManager.list(cwd, undefined);
-		return uniqueSortedSessions([...primary, ...legacy]);
+		return uniqueSortedSessions([...primary, ...rawOnly, ...legacy]);
 	}
 
 	/**

@@ -248,6 +248,42 @@ describe("session selector path/delete interactions", () => {
 		await flushPromises();
 	});
 
+	it("labels repo-local, global, and raw-only sessions and refuses raw-only resume", async () => {
+		const sessions = [
+			makeSession({ id: "repo", source: "repo-local", name: "Repo local" }),
+			makeSession({ id: "global", source: "global", name: "Global" }),
+			makeSession({ id: "raw", source: "raw-only", name: "Raw evidence", modified: new Date("2026-01-01T00:00:00.000Z") }),
+		];
+		const selectedPaths: string[] = [];
+		let errorMessage: string | undefined;
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			(path) => selectedPaths.push(path),
+			() => {},
+			() => {},
+			() => {},
+			{ keybindings },
+		);
+		await flushPromises();
+
+		const output = stripAnsi(selector.render(160).join("\n"));
+		expect(output).toContain("[repo-local] Repo local");
+		expect(output).toContain("[global] Global");
+		expect(output).toContain("[raw-only] Raw evidence");
+
+		const list = selector.getSessionList();
+		list.onError = (message) => {
+			errorMessage = message;
+		};
+		list.handleInput("raw");
+		list.handleInput("\r");
+
+		expect(selectedPaths).toEqual([]);
+		expect(errorMessage).toContain("raw-only");
+		expect(errorMessage).toContain("cannot be resumed as native chat");
+	});
+
 	it("threads sessions when parent and child paths use different symlink aliases", async () => {
 		const paths = createSymlinkedSessionPaths();
 		tempDirs.push(paths.baseDir);

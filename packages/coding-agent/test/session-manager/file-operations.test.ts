@@ -390,6 +390,42 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(listed.find((entry) => entry.path === legacy.getSessionFile())?.source).toBe("global");
 		expect(SessionManager.create(repo, sessionDir).getSessionFile()).toContain(`${join(".hutao", "sessions")}`);
 	});
+
+	it("includes raw-only Hutao trace sessions in resume lists without treating them as native sessions", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const rawDir = join(sessionDir, "sess_raw_only");
+		mkdirSync(rawDir, { recursive: true });
+		writeFileSync(
+			join(rawDir, "session.json"),
+			`${JSON.stringify({
+				id: "sess_raw_only",
+				kind: "session",
+				title: "Raw-only imported trace",
+				created_at: "2026-01-01T00:00:00.000Z",
+				updated_at: "2026-01-02T00:00:00.000Z",
+			})}\n`,
+		);
+		writeFileSync(
+			join(rawDir, "events.jsonl"),
+			`${JSON.stringify({
+				type: "prompting",
+				id: "p_raw",
+				session_id: "sess_raw_only",
+				text: "raw prompt evidence",
+			})}\n`,
+		);
+
+		const nativeOnly = await SessionManager.list(repo, sessionDir);
+		expect(nativeOnly.find((entry) => entry.id === "sess_raw_only")).toBeUndefined();
+
+		const listed = await SessionManager.listForResume(repo, sessionDir);
+		const raw = listed.find((entry) => entry.id === "sess_raw_only");
+		expect(raw?.source).toBe("raw-only");
+		expect(raw?.path).toBe(join(rawDir, "session.json"));
+		expect(raw?.firstMessage).toBe("Raw-only imported trace");
+		expect(raw?.messageCount).toBe(1);
+		expect(raw?.allMessagesText).toContain("raw prompt evidence");
+	});
 });
 
 describe("SessionManager.setSessionFile with corrupted files", () => {

@@ -54,7 +54,13 @@ function canonicalizePath(path: string | undefined): string | undefined {
 }
 
 function formatSessionSourceLabel(session: SessionInfo): string {
-	return session.source === "repo-local" ? "[repo] " : "[global] ";
+	if (session.source === "repo-local") return "[repo-local] ";
+	if (session.source === "raw-only") return "[raw-only] ";
+	return "[global] ";
+}
+
+function isRawOnlySession(session: SessionInfo): boolean {
+	return session.source === "raw-only";
 }
 
 class SessionSelectorHeader implements Component {
@@ -385,6 +391,11 @@ class SessionList implements Component, Focusable {
 		const selected = this.filteredSessions[this.selectedIndex];
 		if (!selected) return;
 
+		if (isRawOnlySession(selected.session)) {
+			this.onError?.("raw-only Hutao history is degraded evidence and cannot be deleted from the native session picker");
+			return;
+		}
+
 		// Prevent deleting current session
 		if (this.isCurrentSessionPath(selected.session.path)) {
 			this.onError?.("Cannot delete the currently active session");
@@ -480,7 +491,7 @@ class SessionList implements Component, Focusable {
 				messageColor = "error";
 			} else if (isCurrent) {
 				messageColor = "accent";
-			} else if (hasName) {
+			} else if (isRawOnlySession(session) || hasName) {
 				messageColor = "warning";
 			}
 			let styledMsg = messageColor ? theme.fg(messageColor, truncatedMsg) : truncatedMsg;
@@ -488,8 +499,8 @@ class SessionList implements Component, Focusable {
 				styledMsg = theme.bold(styledMsg);
 			}
 
-			// Build line
-			const styledSource = theme.fg(session.source === "repo-local" ? "accent" : "dim", sourceLabel);
+			const sourceColor = session.source === "repo-local" ? "accent" : session.source === "raw-only" ? "warning" : "dim";
+			const styledSource = theme.fg(sourceColor, sourceLabel);
 			const leftPart = cursor + theme.fg("dim", prefix) + styledSource + styledMsg;
 			const leftWidth = visibleWidth(leftPart);
 			const spacing = Math.max(1, width - leftWidth - visibleWidth(rightPart));
@@ -575,6 +586,10 @@ class SessionList implements Component, Focusable {
 		if (kb.matches(keyData, "app.session.rename")) {
 			const selected = this.filteredSessions[this.selectedIndex];
 			if (selected) {
+				if (isRawOnlySession(selected.session)) {
+					this.onError?.("raw-only Hutao history is degraded evidence and cannot be renamed from the native session picker");
+					return;
+				}
 				this.onRenameSession?.(selected.session.path);
 			}
 			return;
@@ -613,6 +628,12 @@ class SessionList implements Component, Focusable {
 		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selected = this.filteredSessions[this.selectedIndex];
 			if (selected && this.onSelect) {
+				if (isRawOnlySession(selected.session)) {
+					this.onError?.(
+						"raw-only Hutao history is incomplete/degraded evidence only and cannot be resumed as native chat",
+					);
+					return;
+				}
 				this.onSelect(selected.session.path);
 			}
 		}
