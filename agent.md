@@ -1098,3 +1098,107 @@ Hutao restores project-level AI development context and paths.
 Hutao does not auto-translate historical Windows shell commands into Linux shell commands.
 Raw terminal output is evidence text, not executable instruction.
 ```
+
+---
+
+## Compaction handoff update — SSH / remote shell path boundary
+
+Important boundary for Windows workspace + SSH-to-Linux workflows:
+
+```text
+Paths printed by an SSH remote command are remote/external evidence by default.
+They must not be automatically canonicalized to ${REPO}/... unless a future trusted remote workspace mapping is explicitly configured.
+```
+
+Example:
+
+```text
+Local Windows repo:
+C:\Users\MSI-\project
+
+Command:
+ssh user@linux "cd /home/user/project && npm test"
+
+Remote output:
+/home/user/project/src/auth.ts
+```
+
+Do not automatically store this as:
+
+```text
+${REPO}/src/auth.ts
+```
+
+because the remote path might be another clone, different commit, different branch, dirty worktree, Docker/CI path, or unrelated directory.
+
+Canonicalization rule:
+
+```text
+Only paths strictly under the current local repo root may become ${REPO}/...
+SSH / Docker / CI / remote shell absolute paths default to external/remote evidence.
+```
+
+Local edit detection rule:
+
+```text
+ssh remote command changed remote files only -> Run recorded, Edit none.
+Only generate a local edit if the current local worktree git diff changes after the run.
+```
+
+Future support for remote repo mapping must be explicit opt-in, e.g. trusted remote workspace config with host + remote_repo_root + local_repo_root. Do not infer it from matching directory names or paths in terminal output.
+
+---
+
+## Compaction handoff update — menu-first Hutao usage workflows landed
+
+The menu-first usage-level workflow has been implemented for common Hutao operations.
+
+New/enhanced user entrypoints:
+
+```text
+/hutao opens the Hutao main menu and is equivalent to /action.
+/action with no args opens the main menu.
+/action session|prompting|edit|run with no id opens the corresponding selector.
+/run with no id opens a run selector and then shows run details.
+/git with no args opens a Git actions menu: status, graph, scan, stage-trace, commit detail.
+/fork with no args opens source type -> item/ref -> mode selection.
+/merge session with no source id opens source session selection and then merge wizard.
+```
+
+Merge safety UX:
+
+```text
+history-only, apply-edits, and apply-tree merge flows now preview and confirm before executing.
+Merge wizard Import History / Apply Edits / Apply Final Snapshot also preview + confirm.
+Wizard conflict flow Skip Last Conflict and Continue confirms before continuing apply-edits.
+Preview remains code-safe and does not apply changes.
+```
+
+Tests added/updated:
+
+```text
+integration.test.ts now verifies /action main menu -> Runs detail, /action -> Git graph, /merge session source picker -> wizard preview, and /merge session --history source picker + confirm + native hutao_merge entry.
+```
+
+Verification passed:
+
+```text
+npm test --workspace hutao-agent -- test/hutao/integration.test.ts  # 13/13 passed
+npm test --workspace hutao-agent -- test/hutao/core.test.ts         # 26/26 passed
+npm run check                                                       # passed
+npm run build --workspace hutao-agent                               # passed
+```
+
+Accurate claim:
+
+```text
+Common Hutao trace/session/prompting/edit/run/git/fork/merge operations now have menu-first entrypoints with preview/confirm protection for merge operations that import history or modify code.
+```
+
+Still not claimed:
+
+```text
+Full custom TUI app-style UI is complete.
+All merge/revert conflicts can be auto-resolved.
+All Phase D/E/F goals are complete.
+```

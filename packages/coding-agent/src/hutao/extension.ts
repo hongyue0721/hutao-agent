@@ -243,6 +243,7 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("merge", { description: "Preview or merge Hutao sessions", handler: mergeCommand });
 	pi.registerCommand("run", { description: "List or inspect Hutao runs", handler: runCommand });
 	pi.registerCommand("action", { description: "Open Hutao action menus", handler: actionCommand });
+	pi.registerCommand("hutao", { description: "Open Hutao main menu", handler: actionCommand });
 	pi.registerCommand("language", { description: "Set Hutao menu language", handler: languageCommand });
 	pi.registerCommand("doctor", { description: "Validate or rebuild Hutao trace data", handler: doctorCommand });
 }

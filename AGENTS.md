@@ -4132,3 +4132,306 @@ WSL/Linux -> /mnt/c/.../repo/src/hello.ts
 ```
 
 这就是 Hutao 应遵守的跨平台路径转译模型。
+
+---
+
+## 37. 设计补充 / SSH、远端 shell 与跨机器路径边界
+
+本节补充 36 节的跨平台路径转译边界，特别是 Windows 工作区通过 SSH 连接 Linux 环境执行操作的场景。
+
+### 37.1 SSH 远端路径默认不参与本地 repo path canonicalization
+
+典型场景：
+
+```text
+Windows 本地工作区：
+C:\Users\MSI-\project
+
+agent 在 Windows shell 里执行：
+ssh user@linux "cd /home/user/project && npm test"
+
+远端输出中出现：
+/home/user/project/src/auth.ts
+```
+
+这里的远端路径：
+
+```text
+/home/user/project/src/auth.ts
+```
+
+默认不能转成：
+
+```text
+${REPO}/src/auth.ts
+```
+
+原因：它不是当前本机 repo root：
+
+```text
+C:\Users\MSI-\project
+```
+
+下面的本地文件路径。
+
+路径转译只允许发生在“当前本地 repo root 严格包含的路径”上。
+
+### 37.2 为什么不能自动猜 SSH 远端路径等于本地 repo
+
+远端路径虽然目录名可能相同，但它可能是：
+
+```text
+1. 另一台机器上的另一个 clone。
+2. 不同 commit。
+3. 不同 branch。
+4. 不同 dirty worktree。
+5. 同名但完全无关的目录。
+6. Docker / CI / remote devcontainer 内部路径。
+7. 只存在于远端，不存在于本地的临时路径。
+```
+
+因此不要根据这些信息自动建立映射：
+
+```text
+basename 相同
+目录名同叫 project
+输出里有 src/auth.ts
+ssh command 里 cd /home/user/project
+```
+
+这些都不足以证明远端路径等价于当前本地 repo path。
+
+### 37.3 正确记录方式
+
+SSH 命令本身可以记录为 run：
+
+```json
+{
+  "type": "run_finished",
+  "tool": "bash",
+  "command": "ssh user@linux \"cd /home/user/project && npm test\"",
+  "output_summary": "remote npm test failed",
+  "status": "failed"
+}
+```
+
+但远端输出中的绝对路径应被视为：
+
+```text
+remote/external path evidence
+```
+
+默认处理可以是：
+
+```text
+[external-path-redacted]
+```
+
+或在受控展示层标注为：
+
+```text
+remote path: /home/user/project/src/auth.ts
+```
+
+但不要写成 Hutao canonical path：
+
+```text
+${REPO}/src/auth.ts
+```
+
+### 37.4 本地 edit 检测边界
+
+如果 agent 在 Windows 执行：
+
+```bash
+ssh user@linux "sed -i 's/foo/bar/' /home/user/project/src/auth.ts"
+```
+
+这修改的是远端文件。Windows 本地仓库如果没有产生 git diff，则 Hutao 本地应该记录：
+
+```text
+Run: ssh remote command executed
+Edit: none
+```
+
+只有当命令导致当前本地工作区实际变化，例如：
+
+```text
+scp / rsync 拉回文件
+git pull 改变本地工作区
+命令直接写入当前本地 repo root 下的文件
+```
+
+并且本地 run 前后 git diff 发生变化，才可以生成本地 edit。
+
+### 37.5 未来如果支持 trusted remote workspace，必须显式 opt-in
+
+如果以后要支持 SSH 远端 repo 与本地 repo 的映射，必须显式配置，不允许自动猜。
+
+示例：
+
+```json
+{
+  "remote_workspaces": [
+    {
+      "name": "dev-server",
+      "kind": "ssh",
+      "host": "linux-box",
+      "remote_repo_root": "/home/user/project",
+      "local_repo_root": "${REPO}",
+      "trusted": true
+    }
+  ]
+}
+```
+
+只有这种明确 trusted remote workspace 才能把：
+
+```text
+ssh://linux-box/home/user/project/src/auth.ts
+```
+
+映射为：
+
+```text
+src/auth.ts
+```
+
+并且该映射应保留 remote identity，不要伪装成普通本地路径事实。
+
+### 37.6 简单规则
+
+```text
+当前本机 repo root 下的路径：
+可以转成 ${REPO}/...
+
+SSH / Docker / CI / remote shell 输出里的绝对路径：
+默认 external/remote evidence，不自动转成 ${REPO}/...
+```
+
+正确：
+
+```text
+C:\Users\MSI-\project\src\a.ts
+  -> ${REPO}/src/a.ts
+```
+
+默认不要：
+
+```text
+/home/server/project/src/a.ts
+  -> ${REPO}/src/a.ts
+```
+
+除非未来存在显式 trusted remote workspace mapping。
+
+---
+
+## 38. 最新交接记录 / menu-first usage-level Hutao workflows landed
+
+本节记录本轮继续推进“使用级体验，所有操作逻辑可以用 menu 操作使用”的落地状态。
+
+### 38.1 已落地的菜单入口
+
+新增或增强：
+
+```text
+/hutao
+/action
+/action session
+/action prompting
+/action edit
+/action run
+/action git
+/action fork
+/action merge
+/session
+/prompting
+/edit
+/run
+/git
+/fork
+/merge session
+```
+
+当前行为：
+
+```text
+1. /hutao 是 Hutao 主菜单入口，等价于 /action。
+2. /action 无参数打开主菜单。
+3. 主菜单可进入 Sessions / Promptings / Edits / Runs / Git / Fork / Merge / Doctor / Language。
+4. /action session|prompting|edit|run 不带 id 时进入对应选择菜单。
+5. /run 无参数或只有 filter flag 时进入 run 选择菜单，选中后展示 run detail。
+6. /git 无参数进入 Git 操作菜单，可选择 status、graph、scan、stage-trace、commit detail。
+7. /fork 无参数进入菜单：source type -> item/ref -> mode。
+8. /merge session 无 source id 时进入 source session 选择，然后进入 merge wizard。
+```
+
+### 38.2 merge safety UX
+
+会改变历史或代码的 merge 操作现在在 command/menu 层都有确认保护：
+
+```text
+/merge session <id> --history
+/merge session <id> --apply-edits
+/merge session <id> --apply-tree
+/merge session <id> --wizard -> Import History / Apply Edits / Apply Final Snapshot
+wizard conflict flow -> Skip Last Conflict and Continue
+```
+
+执行前会先调用 preview，并在 confirm 中展示：
+
+```text
+source session
+mode
+changed files
+是否会修改 working tree
+```
+
+preview 模式仍然不改代码。
+
+### 38.3 测试覆盖
+
+新增集成测试覆盖：
+
+```text
+1. /action 主菜单进入 Runs 并查看 run detail。
+2. /action 主菜单进入 Git 并查看 graph。
+3. /merge session 无 id 时选择 source session 并进入 wizard preview。
+4. /merge session --history 无 id 时选择 source session、确认并执行 history-only merge。
+5. history-only merge 追加 hutao_merge native entry。
+```
+
+### 38.4 已验证命令
+
+本轮验证通过：
+
+```bash
+npm test --workspace hutao-agent -- test/hutao/integration.test.ts
+# 13/13 passed
+
+npm test --workspace hutao-agent -- test/hutao/core.test.ts
+# 26/26 passed
+
+npm run check
+# passed, only existing template-literal info in core.test.ts
+
+npm run build --workspace hutao-agent
+# passed
+```
+
+### 38.5 当前准确表述
+
+现在可以说：
+
+```text
+Hutao 的常用 trace/session/prompting/edit/run/git/fork/merge 操作已经有菜单式入口，/hutao 可作为主菜单进入，merge 会改历史或代码的操作有 preview + confirm 保护，并有集成测试覆盖主要 menu-first workflow。
+```
+
+仍然不要过度说：
+
+```text
+完整 TUI 自定义复杂 UI 已完成。
+所有 merge/revert 冲突都能自动解决。
+所有 Phase D/E/F 已完成。
+```

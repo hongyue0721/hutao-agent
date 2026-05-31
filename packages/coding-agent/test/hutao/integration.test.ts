@@ -97,6 +97,20 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 					"View Patch": ["View patch", "查看补丁"],
 					"Preview context hydration": ["Preview context hydration", "预览上下文注入"],
 					"Queue hydration for next turn": ["Queue hydration for next turn", "排队注入到下一轮"],
+					Sessions: ["Sessions", "会话"],
+					Promptings: ["Promptings", "提示"],
+					Edits: ["Edits", "修改"],
+					Runs: ["Runs", "运行记录"],
+					Git: ["Git"],
+					Fork: ["Fork", "创建分支"],
+					Merge: ["Merge", "合并"],
+					Doctor: ["Doctor", "诊断"],
+					Language: ["Language", "语言"],
+					"Import History": ["Import History"],
+					"Apply Edits": ["Apply Edits"],
+					"Apply Final Snapshot": ["Apply Final Snapshot"],
+					"Show status and links": ["Show status and links", "查看状态与关联"],
+					"Show recent graph": ["Show recent graph", "查看最近图谱"],
 				};
 				const candidates = [requested, ...(aliases[requested] ?? [])];
 				return options.find((option) => candidates.some((candidate) => option.includes(candidate))) ?? requested;
@@ -280,6 +294,38 @@ describe("Hutao integration safety", () => {
 		await mergeCommand(`session ${recorder.getSessionId()} --wizard`, makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("Skipped conflicting edits");
 		expect(commandNotifications.at(-1)).toContain("continued");
+	});
+
+	it("drives common Hutao workflows from menu-first commands", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder } = await recordFileEdit(repo, "menu-flow");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "menu flow"]);
+		await new CommitLinker(repo).scanRecentCommits();
+		const events = readSessionEvents(repo, recorder.getSessionId());
+		const run = events.find((event) => event.type === "run_finished");
+		expect(run?.id).toBeDefined();
+
+		commandSelections.push("Runs", String(run?.id).slice(0, 20));
+		await actionCommand("", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Run ");
+		expect(commandNotifications.at(-1)).toContain("produced edits:");
+
+		commandSelections.push("Git", "Show recent graph");
+		await actionCommand("", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Hutao git graph");
+
+		commandSelections.push(recorder.getSessionId().slice(0, 20), "Preview only");
+		await mergeCommand("session", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Hutao merge wizard");
+		expect(commandNotifications.at(-1)).toContain("Merge preview only");
+
+		commandSelections.push(recorder.getSessionId().slice(0, 20));
+		await mergeCommand("session --history", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("History imported");
+		expect(commandNotifications.at(-1)).toContain("No code changes were applied");
+		expect(commandAppendedEntries.at(-1)?.customType).toBe("hutao_merge");
 	});
 
 	it("filters prompting and edit lists", async () => {
