@@ -6,6 +6,34 @@
 
 ---
 
+## Current real working repository
+
+The actual code repository for this task is:
+
+```text
+D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+```
+
+Important:
+
+```text
+D:/OneDrive/Desktop/hutao-agent
+```
+
+is currently not the full Git/code repository. It only contains project instruction files and must not be used as the target for code changes, tests, README rewrites, or Git operations.
+
+Before editing, testing, rewriting README, or running Git commands, always verify:
+
+```bash
+cd /d/OneDrive/Desktop/hutao-agent.__tmp_inspect
+pwd
+git status -sb
+```
+
+If `git status` reports `not a git repository`, stop immediately and switch back to the real repository.
+
+---
+
 ## Current objective
 
 Build `hutao-agent` as a repo-local, Git-native AI coding-agent trace and resume system.

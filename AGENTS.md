@@ -8,6 +8,32 @@
 
 ## 0. 最高优先级指令
 
+### 0.0 当前真实工作仓库目录
+
+当前实际代码仓库以以下目录为准：
+
+```text
+D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+```
+
+注意：
+
+```text
+D:/OneDrive/Desktop/hutao-agent
+```
+
+目前不是完整 Git 代码仓库，只包含项目说明文件，不应作为代码修改、测试、README 重写或 Git 操作的目标目录。
+
+每次开始修改、测试、重写 README 或执行 Git 命令前，必须先确认当前目录是：
+
+```bash
+cd /d/OneDrive/Desktop/hutao-agent.__tmp_inspect
+pwd
+git status -sb
+```
+
+如果 `git status` 报 `not a git repository`，说明走错目录，必须立刻停止并切回真实仓库。
+
 你正在把 `earendil-works/pi` 魔改为一个新的 coding agent：
 
 ```text
