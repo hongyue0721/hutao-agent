@@ -307,6 +307,32 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(opened.buildSessionContext().messages).toHaveLength(2);
 	});
 
+	it("continues writing opened repo-local native sessions back to .hutao", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const session = SessionManager.create(repo, sessionDir);
+		appendRound(session, "initial repo-local turn");
+		const sessionFile = session.getSessionFile()!;
+		const originalSessionId = session.getSessionId();
+
+		const reopened = SessionManager.open(sessionFile);
+		expect(reopened.getSessionId()).toBe(originalSessionId);
+		expect(reopened.getSessionFile()).toBe(sessionFile);
+		expect(reopened.getSessionDir()).toBe(sessionDir);
+		expect(reopened.getCwd()).toBe(repo);
+		appendRound(reopened, "continued after resume");
+
+		const onDisk = readFileSync(sessionFile, "utf-8");
+		expect(onDisk).toContain("initial repo-local turn");
+		expect(onDisk).toContain("continued after resume");
+		expect(JSON.parse(onDisk.split(/\r?\n/)[0]!).cwd).toBe(".");
+
+		const listed = await SessionManager.list(repo, sessionDir);
+		expect(listed.map((entry) => entry.path)).toEqual([sessionFile]);
+		expect(listed[0]?.source).toBe("repo-local");
+		expect(listed[0]?.firstMessage).toBe("initial repo-local turn");
+		expect(listed[0]?.allMessagesText).toContain("continued after resume");
+	});
+
 	it("forks repo-local native sessions into fs_ directories with repo-relative parent refs", async () => {
 		const sessionDir = getRepoLocalSessionDir(repo)!;
 		const session = SessionManager.create(repo, sessionDir);
