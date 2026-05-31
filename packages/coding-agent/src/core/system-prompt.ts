@@ -124,6 +124,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// Always include these
 	addGuideline("Be concise in your responses");
 	addGuideline("Show file paths clearly when working with files");
+	addGuideline(
+		"Before creating a git commit in a Hutao-tracked repository, ensure canonical .hutao trace files are staged first; prefer /git stage-trace unless the user explicitly asks to commit code without trace.",
+	);
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
