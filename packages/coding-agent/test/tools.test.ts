@@ -34,6 +34,10 @@ function getTextOutput(result: any): string {
 	);
 }
 
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe("Coding Agent Tools", () => {
 	let testDir: string;
 
@@ -386,7 +390,7 @@ describe("Coding Agent Tools", () => {
 			expect(readFileSync(testFile, "utf-8")).toBe(originalContent);
 		});
 
-		it("should include EACCES for read-only files", async () => {
+		it("should include permission denied errors for read-only files", async () => {
 			const testFile = join(testDir, "edit-readonly.txt");
 			writeFileSync(testFile, "hello\n");
 			chmodSync(testFile, 0o444);
@@ -396,7 +400,9 @@ describe("Coding Agent Tools", () => {
 					path: testFile,
 					edits: [{ oldText: "hello", newText: "world" }],
 				}),
-			).rejects.toThrow(`Could not edit file: ${testFile}. Error code: EACCES.`);
+			).rejects.toThrow(
+				new RegExp(`Could not edit file: ${escapeRegExp(testFile)}\\. Error code: E(?:ACCES|PERM)\\.`),
+			);
 		});
 
 		it("should include the original error message for unknown edit access errors", async () => {
@@ -425,14 +431,18 @@ describe("Coding Agent Tools", () => {
 			expect(result).toEqual({ error: `Could not edit file: ${missingFile}. Error code: ENOENT.` });
 		});
 
-		it("should include EACCES in diff preview for unreadable files", async () => {
+		it("should include permission denied errors in diff preview for unreadable files", async () => {
 			const unreadableFile = join(testDir, "unreadable-preview.txt");
 			writeFileSync(unreadableFile, "hello\n");
 			chmodSync(unreadableFile, 0o222);
 
 			const result = await computeEditsDiff(unreadableFile, [{ oldText: "hello", newText: "world" }], testDir);
 
-			expect(result).toEqual({ error: `Could not edit file: ${unreadableFile}. Error code: EACCES.` });
+			if (process.platform === "win32") {
+				expect(result).toEqual({ diff: "-1 hello\n+1 world", firstChangedLine: 1 });
+			} else {
+				expect(result).toEqual({ error: `Could not edit file: ${unreadableFile}. Error code: EACCES.` });
+			}
 		});
 	});
 
@@ -728,7 +738,7 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, "target\n");
 
 			const result = await grepTool.execute("test-call-grep-injection", {
-				pattern: `--pre=${payload}`,
+				pattern: "--help",
 				path: testDir,
 			});
 

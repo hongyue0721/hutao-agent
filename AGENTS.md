@@ -3419,3 +3419,389 @@ npx vitest run \
 ```
 
 不要把 targeted tests passed 说成 full suite passed。不要把 Phase B 完成说成 AGENTS.md 全部完成。
+
+---
+
+## 32. 最新交接记录 / 2026-05-31 cross-platform validation status
+
+本节是在 31 节之后追加的更新交接，目的是修正“WSL 还有 14 个失败”这一旧状态。时间线保留，旧记录不删除；后续 agent 如果需要当前状态，以本节为准。
+
+### 32.1 当前分支与已提交修复
+
+当前工作分支：
+
+```text
+fix/full-test-suite-wsl
+```
+
+当前已提交的修复 commit：
+
+```text
+d87363f test(coding-agent): make platform regressions cross-platform
+0cf5b0e test(coding-agent): stabilize hutao rename full-suite regressions
+72f8a28 fix(clipboard): make WSL detection test-isolatable
+146cef4 fix(bash): wait for persisted full-output files
+e8e0ed0 chore(format): apply biome formatting to hutao resume files
+39c95c3 docs(agent): record full-suite repair handoff
+```
+
+说明：
+
+```text
+1. d87363f 是在 0cf5b0e 之后新增的 Windows 跨平台测试修复。
+2. 该 commit 解决的是“普通 Windows 没有 symlink 权限”以及“Windows ESM 绝对路径 import”类问题。
+3. 当前 Windows 工作区仍有 1 个未提交改动：packages/tui/test/autocomplete.test.ts。
+4. 该未提交改动属于 Windows 通用链接测试修复，不是 machine-specific hack。
+```
+
+### 32.2 WSL / Linux 当前状态
+
+已验证环境：
+
+```text
+WSL Ubuntu 26.04 LTS
+node v24.16.0 via nvm
+npm 11.13.0
+```
+
+当前结论：
+
+```text
+WSL / Linux 已验证环境全绿。
+```
+
+已通过：
+
+```bash
+npm run check
+npm run build
+npm test
+```
+
+并且以下两组 targeted 验证通过：
+
+```text
+1. 原 7 个失败文件 targeted 通过。
+2. Hutao repo-local/native resume targeted 通过。
+```
+
+不要过度表述为“所有 Linux 发行版 100% 没问题”。准确表述应为：
+
+```text
+当前已经验证的 Linux/WSL 环境全绿。
+```
+
+### 32.3 Windows 当前状态
+
+当前结论：
+
+```text
+Windows 不是全绿，但已经明显收敛。
+```
+
+当前已通过：
+
+```text
+1. 原 7 个失败文件 targeted 通过。
+2. Hutao targeted 通过。
+3. npm run check 通过。
+4. npm run build 通过。
+```
+
+当前未通过：
+
+```text
+Windows full npm test 仍未全绿。
+```
+
+注意：不要把“Windows targeted + check + build 通过”说成“Windows full suite passed”。
+
+### 32.4 Windows 当前剩余失败的真实性质
+
+这些失败已经不是本轮 Hutao repo-local/native resume 目标本身的失败，而是更广泛的跨平台历史问题。主要类别如下：
+
+```text
+1. symlink / junction / hard link 能力差异
+2. Windows path separator 与 relative-path 断言差异
+3. EPERM / EACCES 错误码差异
+4. rg / glob / shell 参数跨平台差异
+5. 一部分旧 self-update / config 预期未完全迁移
+6. agent-core / coding-agent / tui 的旧测试默认 Unix 语义
+```
+
+这意味着：
+
+```text
+1. 当前 Hutao 本轮修复在 WSL 是成立的。
+2. Windows 剩下的问题需要作为后续跨平台清理项目继续做。
+3. 这些问题不应通过 machine-specific if 分支规避，而应通过 capability detection、path helpers、error-code normalization、cross-platform argument construction 来修。
+```
+
+### 32.5 已采用的跨平台修复原则
+
+本轮已经验证过可接受的普遍环境修法：
+
+```text
+1. Windows ESM 绝对路径 import 改用 pathToFileURL(...).href。
+2. 目录链接测试优先 symlink，Windows 权限不足时 fallback 到 junction。
+3. 文件链接测试优先 symlink，Windows 权限不足时 fallback 到 hard link。
+4. WSL 检测通过显式 options 覆盖实现测试隔离，而不是依赖运行机器的真实 /proc/version。
+5. full-output temp file 刷盘通过等待 stream finish 解决，而不是测试里 sleep。
+```
+
+这些属于：
+
+```text
+capability-aware / cross-platform repair
+```
+
+不是：
+
+```text
+只针对当前这台 Windows 机器的特判
+```
+
+### 32.6 当前最准确对外说法
+
+允许说：
+
+```text
+1. 当前已验证的 WSL/Linux 环境全绿。
+2. Hutao 本轮 repo-local/native resume 修复在 WSL 已完成验收。
+3. Windows 相关 targeted / check / build 已通过。
+4. Windows full suite 仍有跨平台历史问题待清理。
+```
+
+不要说：
+
+```text
+1. 所有 Linux 都绝对没问题。
+2. Windows 也已经全绿。
+3. 所有 full suite 都通过。
+4. AGENTS.md 已全部完成。
+```
+
+### 32.7 下一位 agent 如果继续，只应做什么
+
+如果继续修 Windows full suite，应按下面优先级推进：
+
+```text
+1. agent harness / nodejs-env / prompt-templates / skills 的链接能力兼容
+2. path display / relative-path / ignore 输入的 Windows 归一化
+3. permission denied 断言统一接受 EACCES / EPERM
+4. rg / glob / shell 参数跨平台构造
+5. config/self-update 历史测试与 Hutao 当前策略统一
+```
+
+如果用户要求“先不修只分析”，当前最准确结论就是：
+
+```text
+Linux/WSL 已验证全绿；Windows full suite 仍未全绿，且剩余问题属于更广的跨平台历史问题，不是本轮 Hutao 目标本身的失败。
+```
+
+---
+
+## 33. 最新交接记录 / Windows full-suite repair completed
+
+本节是在 32 节之后追加的更新交接。32 节中的“Windows full npm test 仍未全绿”已经是旧状态；当前状态以本节为准。
+
+### 33.1 当前验证结果
+
+Windows 当前已通过：
+
+```text
+1. 旧 Windows 失败矩阵 targeted 通过。
+2. packages/agent harness targeted 通过：29/29。
+3. packages/coding-agent 旧失败文件 targeted 通过：143/143。
+4. npm run check 通过。
+5. npm run build 通过。
+6. npm test 全量通过。
+```
+
+其中 full `npm test` 尾部 TUI 汇总显示：
+
+```text
+tests 631
+suites 113
+pass 631
+fail 0
+```
+
+并且整条 `npm test` 命令没有失败退出。
+
+### 33.2 本轮 Windows 修复范围
+
+本轮继续修复了 32.7 中列出的 Windows full-suite 剩余项：
+
+```text
+1. agent-core harness 中 nodejs-env / prompt-templates / skills 的 Windows path 与 link 能力问题。
+2. coding-agent 中 paths / file-mutation-queue / resource-loader 的 symlink 权限问题。
+3. footer / sdk session manager 的 Windows path separator 与 Git Bash cwd 表示问题。
+4. tools 中 EPERM / EACCES 和 grep flag-like pattern 的跨平台测试问题。
+5. find tool 中 path-containing glob 在 Windows fd 下匹配不到的真实实现问题。
+6. config self-update tests 中 fake .cmd 参数引用与 chmod Windows 语义问题。
+7. interactive suspend tests 中需要显式模拟 linux/win32 platform 分支的问题。
+```
+
+### 33.3 重要实现修复
+
+```text
+1. packages/agent/src/harness/env/nodejs.ts
+   - fileInfo name 改用 node:path basename，修复 Windows 下 name 可能包含整段路径的问题。
+
+2. packages/agent/src/harness/skills.ts
+   - env path helper 支持 / 与 \，避免 Windows 绝对路径被传入 ignore.ignores()。
+
+3. packages/agent/src/harness/prompt-templates.ts
+   - basename helper 支持 / 与 \。
+
+4. packages/coding-agent/src/core/tools/find.ts
+   - path-containing glob 不再依赖 fd --full-path 的跨平台行为。
+   - 先由 fd 枚举候选，再用 minimatch 对 POSIX relative path 做最终过滤。
+```
+
+### 33.4 测试基建修复
+
+新增：
+
+```text
+packages/coding-agent/test/link-test-utils.ts
+```
+
+用于统一测试链接能力：
+
+```text
+1. directory link: symlink -> junction fallback on Windows
+2. file link: symlink -> hard link fallback on Windows
+```
+
+同类 helper 也加到了：
+
+```text
+packages/agent/test/harness/session-test-utils.ts
+```
+
+注意：这些是 capability-aware 修复，不是 machine-specific hack。
+
+### 33.5 Build side effects
+
+`npm run build` 会重新生成：
+
+```text
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts
+```
+
+本轮已在验证后恢复这两个文件，避免把无关模型数据变动混进跨平台修复 diff。
+
+### 33.6 当前准确对外说法
+
+允许说：
+
+```text
+当前已验证的 WSL/Linux 环境全绿。
+当前 Windows 环境也已通过 npm run check、npm run build、npm test。
+旧 Windows full-suite 跨平台失败矩阵已经收住。
+```
+
+仍然不要过度说：
+
+```text
+所有 Linux 发行版和所有 Windows 机器都 100% 保证无问题。
+AGENTS.md 全部产品路线已经完成。
+```
+
+---
+
+## 34. 最新交接记录 / Windows-to-Linux session portability boundary
+
+本节补充 Windows 平台开发产生的 Hutao 会话迁移到 Linux/WSL 时的准确边界，避免后续 agent 把“跨平台可恢复上下文”误说成“自动转译并复现所有 Windows shell 行为”。
+
+### 34.1 当前可以确认的能力
+
+当前架构和本轮修复已经支持/验证到以下程度：
+
+```text
+1. .hutao 中 canonical path 的产品规则仍是 repo-relative POSIX path。
+2. Windows 与 WSL/Linux 的 check/build/full npm test 当前已在各自验证环境中通过。
+3. repo-local/native resume 相关 targeted tests 已通过。
+4. clone-path 类测试已覆盖“不同 repo path 后仍可读取 repo-local session”的关键语义。
+5. Windows 路径、symlink/junction/hardlink、fd glob、Git Bash cwd、EPERM/EACCES 等跨平台测试问题已收敛。
+```
+
+因此，允许的准确表述是：
+
+```text
+Windows 平台开发产生的 Hutao repo-local session / trace，设计上应可在 Linux/WSL clone 后被读取、展示、resume，并继续写回 .hutao。
+```
+
+### 34.2 不能过度承诺的能力
+
+不要说：
+
+```text
+1. Windows 里跑过的每一条历史 bash/powershell/cmd 命令都会自动转译成 Linux 命令。
+2. raw terminal output 中出现的 Windows 绝对路径会全部被改写成 Linux 绝对路径。
+3. 所有 Linux 发行版、所有 shell、所有工具版本都 100% 保证无问题。
+4. 可以 100% 复现模型当时状态或当时运行环境。
+```
+
+正确边界是：
+
+```text
+Hutao 迁移和恢复的是项目级 AI 开发上下文：prompting / run / edit / patch / native conversation。
+Hutao 不承诺自动把历史 Windows shell 行为转译成 Linux shell 行为。
+历史 raw 文本是证据，不是可执行 instruction。
+```
+
+### 34.3 仍未完成的硬验收
+
+虽然当前单元/集成测试和 full-suite 已经跨平台收敛，但还没有在本轮最后执行完整的真实端到端流程：
+
+```bash
+# Windows
+mkdir demo
+cd demo
+git init
+hutao
+# 完成至少一次包含 assistant message、tool call、edit 的对话
+git add .hutao .
+git commit -m "demo hutao trace"
+git push
+
+# Linux / WSL
+git clone <repo> demo-clone
+cd demo-clone
+hutao
+# resume repo-local session
+# 继续输入
+# 确认新数据写回 .hutao
+```
+
+因此当前只能说：
+
+```text
+跨平台迁移设计、路径策略、repo-local/native resume 相关测试、Windows/WSL full-suite 验证已经就绪。
+真实 Windows -> Linux clone/resume/writeback 端到端人工验收尚未在本轮完成。
+```
+
+### 34.4 后续如果要补硬验收
+
+建议后续专门做一个小 demo repo，验证：
+
+```text
+1. Windows 创建 Hutao session。
+2. .hutao/sessions/<id>/session.json、events.jsonl、native-session 相关文件写入。
+3. 所有 canonical paths 为 repo-relative POSIX path。
+4. Git commit 后在 Linux/WSL clone。
+5. hutao resume picker 显示 repo-local session。
+6. 打开后能看到原 native conversation message/tool/edit entries。
+7. 继续输入后新 prompting/run/edit 写回当前 clone 的 .hutao。
+8. 不把历史 session 文本提升为 system instruction。
+```
+
+只有这个流程通过后，才可以升级表述为：
+
+```text
+已实际验收 Windows 产生的 Hutao 会话可在该 Linux/WSL 环境中 resume 并继续写回。
+```

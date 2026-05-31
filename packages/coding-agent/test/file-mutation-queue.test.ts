@@ -1,10 +1,11 @@
-import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEditTool } from "../src/core/tools/edit.ts";
 import { withFileMutationQueue } from "../src/core/tools/file-mutation-queue.ts";
 import { createWriteTool } from "../src/core/tools/write.ts";
+import { createDirectoryLinkForTest } from "./link-test-utils.ts";
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,10 +77,13 @@ describe("withFileMutationQueue", () => {
 
 	it("uses the same queue for symlink aliases", async () => {
 		const dir = await createTempDir();
-		const targetPath = join(dir, "target.txt");
-		const symlinkPath = join(dir, "alias.txt");
+		const realDir = join(dir, "real");
+		const aliasDir = join(dir, "alias");
+		await mkdir(realDir, { recursive: true });
+		createDirectoryLinkForTest(realDir, aliasDir);
+		const targetPath = join(realDir, "target.txt");
+		const symlinkPath = join(aliasDir, "target.txt");
 		await writeFile(targetPath, "hello\n", "utf8");
-		await symlink(targetPath, symlinkPath);
 
 		const order: string[] = [];
 		await Promise.all([

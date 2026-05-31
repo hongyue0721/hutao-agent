@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it, test } from "node:test";
@@ -34,6 +34,32 @@ const setupFolder = (baseDir: string, structure: FolderStructure = {}): void => 
 		mkdirSync(dirname(fullPath), { recursive: true });
 		writeFileSync(fullPath, contents);
 	});
+};
+
+const createDirectoryLinkForTest = (target: string, link: string): void => {
+	try {
+		symlinkSync(target, link, "dir");
+		return;
+	} catch (error) {
+		if (process.platform !== "win32") {
+			throw error;
+		}
+	}
+
+	symlinkSync(target, link, "junction");
+};
+
+const createFileLinkForTest = (target: string, link: string): void => {
+	try {
+		symlinkSync(target, link, "file");
+		return;
+	} catch (error) {
+		if (process.platform !== "win32") {
+			throw error;
+		}
+	}
+
+	linkSync(target, link);
 };
 
 const fdPath = resolveFdPath();
@@ -300,7 +326,7 @@ describe("CombinedAutocompleteProvider", () => {
 			assert.ok(!values.some((value) => value === "@.git" || value.startsWith("@.git/")));
 		});
 
-		test("follows symlinked directories for fuzzy @ search", async () => {
+		test("follows linked directories for fuzzy @ search", async () => {
 			setupFolder(baseDir, {
 				files: {
 					"dir/some_file.txt": "real",
@@ -308,10 +334,10 @@ describe("CombinedAutocompleteProvider", () => {
 			});
 			setupFolder(outsideDir, {
 				files: {
-					"some_file.txt": "symlinked",
+					"some_file.txt": "linked",
 				},
 			});
-			symlinkSync("../outside", join(baseDir, "symlinked_dir"));
+			createDirectoryLinkForTest(outsideDir, join(baseDir, "linked_dir"));
 
 			const provider = new CombinedAutocompleteProvider([], baseDir, requireFdPath());
 			const line = "@some";
@@ -319,33 +345,33 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const values = result?.items.map((item) => item.value) ?? [];
 			assert.ok(values.includes("@dir/some_file.txt"));
-			assert.ok(values.includes("@symlinked_dir/some_file.txt"));
+			assert.ok(values.includes("@linked_dir/some_file.txt"));
 		});
 
-		test("returns symlinked directories when matching their name", async () => {
+		test("returns linked directories when matching their name", async () => {
 			setupFolder(outsideDir, {
 				files: {
-					"nested/file.txt": "symlinked",
+					"nested/file.txt": "linked",
 				},
 			});
-			symlinkSync("../outside", join(baseDir, "symlinked_dir"));
+			createDirectoryLinkForTest(outsideDir, join(baseDir, "linked_dir"));
 
 			const provider = new CombinedAutocompleteProvider([], baseDir, requireFdPath());
-			const line = "@symlinked";
+			const line = "@linked";
 			const result = await getSuggestions(provider, [line], 0, line.length);
 
 			const values = result?.items.map((item) => item.value) ?? [];
-			assert.ok(values.includes("@symlinked_dir/"));
+			assert.ok(values.includes("@linked_dir/"));
 		});
 
-		test("returns symlinked files without requiring type l", async () => {
+		test("returns linked files without requiring type l", async () => {
 			setupFolder(baseDir, {
 				files: {
 					"original.txt": "content",
 				},
 			});
 			const linkPath = join(baseDir, "link.txt");
-			symlinkSync("original.txt", linkPath);
+			createFileLinkForTest(join(baseDir, "original.txt"), linkPath);
 
 			const provider = new CombinedAutocompleteProvider([], baseDir, requireFdPath());
 			const line = "@link";

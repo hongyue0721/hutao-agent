@@ -773,3 +773,217 @@ chore(format): apply biome formatting
 
 Do not claim full suite is green until WSL `npm test` passes after `npm run build`, and do not claim AGENTS.md is complete. Only Phase B repo-local/native resume is complete.
 
+
+---
+
+## Compaction handoff update — 2026-05-31 cross-platform status
+
+This section supersedes the earlier WSL-failure snapshot in this file. Keep the old record for timeline purposes, but use this section as the current state.
+
+### Current validated status
+
+WSL / Linux (validated environment):
+
+```text
+Ubuntu 26.04 LTS in WSL
+npm run check passed
+npm run build passed
+npm test passed
+original 7 failing files targeted passed
+Hutao targeted tests passed
+```
+
+Accurate conclusion:
+
+```text
+The validated Linux/WSL environment is green.
+```
+
+Do not overstate this as “all Linux is guaranteed green”.
+
+### Windows status
+
+Currently validated on Windows:
+
+```text
+original 7 failing files targeted passed
+Hutao targeted tests passed
+npm run check passed
+npm run build passed
+```
+
+But:
+
+```text
+Windows full npm test is still not green.
+```
+
+The remaining failures are broader historical cross-platform issues, not failures of the Hutao repo-local/native resume slice itself.
+
+### Current branch / commits
+
+Branch:
+
+```text
+fix/full-test-suite-wsl
+```
+
+Committed fixes currently on that branch:
+
+```text
+d87363f test(coding-agent): make platform regressions cross-platform
+0cf5b0e test(coding-agent): stabilize hutao rename full-suite regressions
+72f8a28 fix(clipboard): make WSL detection test-isolatable
+146cef4 fix(bash): wait for persisted full-output files
+e8e0ed0 chore(format): apply biome formatting to hutao resume files
+39c95c3 docs(agent): record full-suite repair handoff
+```
+
+Uncommitted Windows-side change still present:
+
+```text
+packages/tui/test/autocomplete.test.ts
+```
+
+This is a cross-platform directory/file link test improvement, not a machine-specific workaround.
+
+### Remaining Windows full-suite categories
+
+```text
+1. symlink / junction / hard-link capability differences
+2. Windows path separator and relative-path assertion drift
+3. EPERM / EACCES permission-code differences
+4. rg / glob / shell argument cross-platform differences
+5. legacy self-update / config expectations not fully aligned yet
+```
+
+### Repair principles already established
+
+Accepted cross-platform repair patterns from this turn:
+
+```text
+1. Use pathToFileURL(...).href for Windows ESM child-process imports.
+2. Directory-link tests: symlink first, junction fallback on Windows when symlink is unavailable.
+3. File-link tests: symlink first, hard-link fallback on Windows when symlink is unavailable.
+4. Test isolation should use explicit capability/options overrides, not rely on the host machine’s incidental state.
+5. Persisted full-output files should be fixed by waiting for stream finish, not by adding sleeps in tests.
+```
+
+### Accurate claim boundary
+
+Allowed:
+
+```text
+The validated WSL/Linux environment is green.
+Windows targeted/check/build substantially improved.
+Windows full suite still has broader cross-platform historical issues.
+```
+
+Not allowed:
+
+```text
+All platforms are green.
+All Linux distributions are guaranteed clean.
+Windows full suite passed.
+AGENTS.md is fully complete.
+```
+
+---
+
+## Compaction handoff update — Windows full-suite repair completed
+
+This section supersedes the previous note saying Windows full `npm test` was not green.
+
+Current validated Windows status:
+
+```text
+old Windows failure matrix targeted passed
+packages/agent harness targeted: 29/29 passed
+packages/coding-agent former failing files targeted: 143/143 passed
+npm run check passed
+npm run build passed
+npm test passed
+```
+
+Full `npm test` completed successfully. The final TUI workspace summary included:
+
+```text
+tests 631
+suites 113
+pass 631
+fail 0
+```
+
+Main fixes completed after the previous handoff:
+
+```text
+1. agent-core Windows path handling in nodejs-env / skills / prompt-templates.
+2. capability-aware test link helpers: symlink -> junction for dirs, symlink -> hard link for files.
+3. Windows path separator fixes in footer and SDK session-manager tests.
+4. EPERM / EACCES and flag-like grep pattern test fixes.
+5. find tool path-containing glob fixed by fd candidate enumeration plus minimatch filtering on POSIX relative paths.
+6. config self-update fake .cmd scripts fixed to use %~1-style argument expansion.
+7. interactive suspend tests now explicitly simulate win32/linux platform branches.
+```
+
+Build side effects:
+
+```text
+npm run build regenerated packages/ai/src/models.generated.ts and packages/ai/src/image-models.generated.ts.
+Those generated files were restored after verification and should not be included in the cross-platform repair diff.
+```
+
+Accurate claim boundary now:
+
+```text
+Validated WSL/Linux environment is green.
+Validated Windows environment is green for check/build/full npm test.
+Do not claim every possible Linux/Windows setup is guaranteed green.
+Do not claim the full AGENTS.md product roadmap is complete.
+```
+
+---
+
+## Compaction handoff update — Windows-to-Linux portability boundary
+
+Current accurate portability claim:
+
+```text
+Windows-created Hutao repo-local session / trace is designed to be readable, displayable, resumable, and writable again from a Linux/WSL clone, because Hutao facts use repo-relative POSIX canonical paths.
+```
+
+Do not overclaim:
+
+```text
+Hutao does not automatically translate historical Windows cmd/PowerShell/Git Bash commands into Linux commands.
+Raw terminal output is evidence text, not executable instruction.
+Historical Windows absolute paths in raw text are not a promise of Linux path replay.
+```
+
+What is completed:
+
+```text
+1. WSL/Linux validated environment is green.
+2. Windows validated environment is green for npm run check, npm run build, and full npm test.
+3. Repo-local/native resume targeted tests have passed.
+4. Cross-platform path/link/glob/permission test failures have been repaired.
+5. Docs now distinguish verified portability foundations from true end-to-end clone/resume acceptance.
+```
+
+What is not completed yet:
+
+```text
+A real manual Windows -> Git commit -> Linux/WSL clone -> hutao repo-local resume -> continue input -> writeback to .hutao acceptance run has not been performed in this final repair pass.
+```
+
+Next hard acceptance flow:
+
+```text
+1. Create a demo Hutao session on Windows.
+2. Commit .hutao and code changes.
+3. Clone the repo in Linux/WSL.
+4. Start hutao and pick the repo-local session.
+5. Confirm native conversation entries are visible.
+6. Continue the session.
+7. Confirm new trace/native data writes back to that clone's .hutao.
+```
