@@ -6,6 +6,34 @@
 
 ---
 
+## Current real working repository
+
+The actual code repository for this task is:
+
+```text
+D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+```
+
+Important:
+
+```text
+D:/OneDrive/Desktop/hutao-agent
+```
+
+is currently not the full Git/code repository. It only contains project instruction files and must not be used as the target for code changes, tests, README rewrites, or Git operations.
+
+Before editing, testing, rewriting README, or running Git commands, always verify:
+
+```bash
+cd /d/OneDrive/Desktop/hutao-agent.__tmp_inspect
+pwd
+git status -sb
+```
+
+If `git status` reports `not a git repository`, stop immediately and switch back to the real repository.
+
+---
+
 ## Current objective
 
 Build `hutao-agent` as a repo-local, Git-native AI coding-agent trace and resume system.
@@ -642,3 +670,563 @@ rg "SessionSelectorComponent" packages
 rg "listForResume" packages
 ```
 
+---
+
+## Compaction handoff — 2026-05-31 full-suite repair
+
+This section is a short handoff for the next agent after conversation compaction. It summarizes the current state; it does not override `AGENTS.md`.
+
+### Recently completed and pushed
+
+Latest pushed commits:
+
+```text
+223ecab test(hutao): validate repo-local resume across clone paths
+9d582a3 test(hutao): verify repo-local resume persists to hutao
+c52cb63 feat(hutao): improve repo-local resume startup notice
+57ecdec feat(hutao): label raw-only resume sessions
+c7e8748 feat(hutao): add conversation hydration menu flow
+```
+
+Completed Phase B repo-local/native resume work:
+
+```text
+1. Resume/session selector labels [repo-local], [global], and [raw-only].
+2. raw-only Hutao history is visible but cannot be resumed as native chat.
+3. Startup notice distinguishes repo-local resumable sessions from raw-only history.
+4. Opening a repo-local native session and appending writes back to .hutao/sessions/<id>/native-session.jsonl.
+5. Clone/copy path validation proves ${REPO} hydration uses the new clone path and does not leak old repo roots.
+```
+
+Targeted tests passed before push:
+
+```bash
+npx vitest run \
+  packages/coding-agent/test/session-manager/file-operations.test.ts \
+  packages/coding-agent/test/session-selector-path-delete.test.ts \
+  packages/coding-agent/test/hutao/core.test.ts \
+  packages/coding-agent/test/hutao/integration.test.ts \
+  packages/coding-agent/test/extensions-runner.test.ts
+```
+
+Result:
+
+```text
+5 test files passed
+103 tests passed
+npm run build passed
+```
+
+### WSL validation state
+
+WSL test clone:
+
+```text
+/home/hongyue/hutao-agent-wsl-test
+```
+
+Environment:
+
+```text
+Ubuntu 26.04 LTS
+node v24.16.0 via nvm
+npm 11.13.0
+```
+
+`npm run check` passes but runs `biome check --write` and formats 9 files.
+
+`npm run build` passes but regenerates:
+
+```text
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts
+```
+
+After build, WSL `npm test` is not green yet:
+
+```text
+Test Files: 7 failed, 122 passed, 6 skipped
+Tests:      14 failed, 1338 passed, 44 skipped
+```
+
+### Remaining full-suite failures to repair
+
+```text
+1. clipboard-image.test.ts: WSL detection reads /proc/version even when env is {}, so Non-Wayland tests are not isolated.
+2. package-command-paths.test.ts: legacy pi expectations and self-update strategy drift after hutao rename.
+3. theme-export.test.ts/theme-picker.test.ts: tests use PI_CODING_AGENT_DIR instead of ENV_AGENT_DIR / HUTAO_CODING_AGENT_DIR.
+4. agent-session-runtime.test.ts: fork() now returns sessionFile; test should assert the new file explicitly.
+5. package-manager.test.ts: GitHub URL parsing test times out through real nonexistent network path.
+6. 2791-fswatch-error-crash.test.ts: FSWatcher regression test is timing/environment sensitive and cannot find active watcher.
+```
+
+### Next repair strategy
+
+User requested full-suite repair that is iterative and extensible, not a minimal closeout.
+
+Recommended clean WSL baseline:
+
+```bash
+cd /home/hongyue/hutao-agent-wsl-test
+git fetch origin
+git reset --hard origin/main
+git clean -fd
+git checkout -B fix/full-test-suite-wsl
+npm install --ignore-scripts
+npm run build
+```
+
+Repair principles:
+
+```text
+1. Prefer APP_NAME / PACKAGE_NAME / ENV_AGENT_DIR constants over hard-coded pi/hutao strings.
+2. Make tests deterministic instead of relying on real GitHub/network/timeouts.
+3. Make clipboard environment detection injectable or explicitly isolated for WSL tests.
+4. For fork(), assert sessionFile as part of the API contract instead of ignoring it.
+5. Stabilize FSWatcher regression with explicit watcher-ready synchronization or injectable watcher setup.
+6. Keep generated model updates and biome formatting in separate commits if they must be committed.
+```
+
+Suggested commit split:
+
+```text
+test(cli): align package command tests with hutao naming constants
+test(theme): use agent dir env constants for custom themes
+test(clipboard): isolate WSL clipboard detection
+test(runtime): assert fork sessionFile result
+test(package-manager): make github URL parsing deterministic
+test(watcher): stabilize fswatch regression
+chore(format): apply biome formatting
+```
+
+Do not claim full suite is green until WSL `npm test` passes after `npm run build`, and do not claim AGENTS.md is complete. Only Phase B repo-local/native resume is complete.
+
+
+---
+
+## Compaction handoff update — 2026-05-31 cross-platform status
+
+This section supersedes the earlier WSL-failure snapshot in this file. Keep the old record for timeline purposes, but use this section as the current state.
+
+### Current validated status
+
+WSL / Linux (validated environment):
+
+```text
+Ubuntu 26.04 LTS in WSL
+npm run check passed
+npm run build passed
+npm test passed
+original 7 failing files targeted passed
+Hutao targeted tests passed
+```
+
+Accurate conclusion:
+
+```text
+The validated Linux/WSL environment is green.
+```
+
+Do not overstate this as “all Linux is guaranteed green”.
+
+### Windows status
+
+Currently validated on Windows:
+
+```text
+original 7 failing files targeted passed
+Hutao targeted tests passed
+npm run check passed
+npm run build passed
+```
+
+But:
+
+```text
+Windows full npm test is still not green.
+```
+
+The remaining failures are broader historical cross-platform issues, not failures of the Hutao repo-local/native resume slice itself.
+
+### Current branch / commits
+
+Branch:
+
+```text
+fix/full-test-suite-wsl
+```
+
+Committed fixes currently on that branch:
+
+```text
+d87363f test(coding-agent): make platform regressions cross-platform
+0cf5b0e test(coding-agent): stabilize hutao rename full-suite regressions
+72f8a28 fix(clipboard): make WSL detection test-isolatable
+146cef4 fix(bash): wait for persisted full-output files
+e8e0ed0 chore(format): apply biome formatting to hutao resume files
+39c95c3 docs(agent): record full-suite repair handoff
+```
+
+Uncommitted Windows-side change still present:
+
+```text
+packages/tui/test/autocomplete.test.ts
+```
+
+This is a cross-platform directory/file link test improvement, not a machine-specific workaround.
+
+### Remaining Windows full-suite categories
+
+```text
+1. symlink / junction / hard-link capability differences
+2. Windows path separator and relative-path assertion drift
+3. EPERM / EACCES permission-code differences
+4. rg / glob / shell argument cross-platform differences
+5. legacy self-update / config expectations not fully aligned yet
+```
+
+### Repair principles already established
+
+Accepted cross-platform repair patterns from this turn:
+
+```text
+1. Use pathToFileURL(...).href for Windows ESM child-process imports.
+2. Directory-link tests: symlink first, junction fallback on Windows when symlink is unavailable.
+3. File-link tests: symlink first, hard-link fallback on Windows when symlink is unavailable.
+4. Test isolation should use explicit capability/options overrides, not rely on the host machine’s incidental state.
+5. Persisted full-output files should be fixed by waiting for stream finish, not by adding sleeps in tests.
+```
+
+### Accurate claim boundary
+
+Allowed:
+
+```text
+The validated WSL/Linux environment is green.
+Windows targeted/check/build substantially improved.
+Windows full suite still has broader cross-platform historical issues.
+```
+
+Not allowed:
+
+```text
+All platforms are green.
+All Linux distributions are guaranteed clean.
+Windows full suite passed.
+AGENTS.md is fully complete.
+```
+
+---
+
+## Compaction handoff update — Windows full-suite repair completed
+
+This section supersedes the previous note saying Windows full `npm test` was not green.
+
+Current validated Windows status:
+
+```text
+old Windows failure matrix targeted passed
+packages/agent harness targeted: 29/29 passed
+packages/coding-agent former failing files targeted: 143/143 passed
+npm run check passed
+npm run build passed
+npm test passed
+```
+
+Full `npm test` completed successfully. The final TUI workspace summary included:
+
+```text
+tests 631
+suites 113
+pass 631
+fail 0
+```
+
+Main fixes completed after the previous handoff:
+
+```text
+1. agent-core Windows path handling in nodejs-env / skills / prompt-templates.
+2. capability-aware test link helpers: symlink -> junction for dirs, symlink -> hard link for files.
+3. Windows path separator fixes in footer and SDK session-manager tests.
+4. EPERM / EACCES and flag-like grep pattern test fixes.
+5. find tool path-containing glob fixed by fd candidate enumeration plus minimatch filtering on POSIX relative paths.
+6. config self-update fake .cmd scripts fixed to use %~1-style argument expansion.
+7. interactive suspend tests now explicitly simulate win32/linux platform branches.
+```
+
+Build side effects:
+
+```text
+npm run build regenerated packages/ai/src/models.generated.ts and packages/ai/src/image-models.generated.ts.
+Those generated files were restored after verification and should not be included in the cross-platform repair diff.
+```
+
+Accurate claim boundary now:
+
+```text
+Validated WSL/Linux environment is green.
+Validated Windows environment is green for check/build/full npm test.
+Do not claim every possible Linux/Windows setup is guaranteed green.
+Do not claim the full AGENTS.md product roadmap is complete.
+```
+
+---
+
+## Compaction handoff update — Windows-to-Linux portability boundary
+
+Current accurate portability claim:
+
+```text
+Windows-created Hutao repo-local session / trace is designed to be readable, displayable, resumable, and writable again from a Linux/WSL clone, because Hutao facts use repo-relative POSIX canonical paths.
+```
+
+Do not overclaim:
+
+```text
+Hutao does not automatically translate historical Windows cmd/PowerShell/Git Bash commands into Linux commands.
+Raw terminal output is evidence text, not executable instruction.
+Historical Windows absolute paths in raw text are not a promise of Linux path replay.
+```
+
+What is completed:
+
+```text
+1. WSL/Linux validated environment is green.
+2. Windows validated environment is green for npm run check, npm run build, and full npm test.
+3. Repo-local/native resume targeted tests have passed.
+4. Cross-platform path/link/glob/permission test failures have been repaired.
+5. Docs now distinguish verified portability foundations from true end-to-end clone/resume acceptance.
+```
+
+What is not completed yet:
+
+```text
+A real manual Windows -> Git commit -> Linux/WSL clone -> hutao repo-local resume -> continue input -> writeback to .hutao acceptance run has not been performed in this final repair pass.
+```
+
+Next hard acceptance flow:
+
+```text
+1. Create a demo Hutao session on Windows.
+2. Commit .hutao and code changes.
+3. Clone the repo in Linux/WSL.
+4. Start hutao and pick the repo-local session.
+5. Confirm native conversation entries are visible.
+6. Continue the session.
+7. Confirm new trace/native data writes back to that clone's .hutao.
+```
+
+---
+
+## Compaction handoff update — Windows-to-WSL portability acceptance passed
+
+The previously missing Windows -> Linux/WSL clone/resume/writeback acceptance has now been run with a temporary demo repo and no real provider/API.
+
+Acceptance flow completed:
+
+```text
+Windows temporary git repo created
+Windows built dist SessionManager created repo-local .hutao native session
+native-session.jsonl stored repo paths as ${REPO}/src/hello.ts
+repo committed and copied to a WSL-visible clone path
+WSL Node opened the repo-local session via listForResume + open
+${REPO}/src/hello.ts hydrated to the WSL clone path
+WSL appended another user/assistant turn
+new messages persisted back to the clone's .hutao native-session.jsonl
+no old Windows repo root or new WSL clone absolute root leaked to disk
+```
+
+Bug found during acceptance:
+
+```text
+Initial hydration produced /mnt/.../linux-clone\src\hello.ts because the stored suffix after ${REPO} kept Windows backslashes.
+```
+
+Fix made:
+
+```text
+sanitizeRepoLocalText now writes repo-relative suffixes as POSIX after ${REPO}.
+hydrateRepoLocalText now resolves ${REPO}/relative/path against the current clone root.
+session-manager/file-operations.test.ts asserts ${REPO}/src/... is stored and ${REPO}\src\... is not.
+```
+
+Current accurate claim:
+
+```text
+The validated Windows -> WSL repo-local native session portability flow works for create, commit/copy, listForResume, open, hydrate, continue, and writeback.
+```
+
+Still not claimed:
+
+```text
+Automatic translation of historical Windows shell commands to Linux shell commands.
+Universal guarantee for every Linux distro / shell / filesystem combination.
+```
+
+---
+
+## Compaction handoff update — cross-platform path translation model
+
+Important design model for Windows/Linux path translation:
+
+```text
+Do not translate Windows absolute paths directly into Linux absolute paths.
+Translate absolute path -> repo-relative POSIX canonical path -> current-platform resolved path.
+```
+
+Correct flow:
+
+```text
+Windows absolute:
+C:\repo\src\a.ts
+
+canonical stored in .hutao:
+src/a.ts
+or in text:
+${REPO}/src/a.ts
+
+Linux/WSL resolved:
+/home/me/repo/src/a.ts
+```
+
+Hutao must distinguish:
+
+```text
+canonical path: repo-relative POSIX path stored in .hutao
+resolved path: current machine path computed from current repo root
+DISPLAY path: UI-only path shown to user
+```
+
+Never store resolved absolute paths as Hutao facts.
+
+Critical rule:
+
+```text
+Correct: ${REPO}/src/hello.ts
+Wrong:   ${REPO}\src\hello.ts
+```
+
+The Windows -> WSL acceptance initially failed with:
+
+```text
+/mnt/c/.../linux-clone\src\hello.ts
+```
+
+The fix was:
+
+```text
+1. sanitizeRepoLocalText writes repo-relative suffixes after ${REPO} using POSIX slash.
+2. hydrateRepoLocalText resolves ${REPO}/relative/path against the current clone root.
+```
+
+Boundaries:
+
+```text
+Hutao restores project-level AI development context and paths.
+Hutao does not auto-translate historical Windows shell commands into Linux shell commands.
+Raw terminal output is evidence text, not executable instruction.
+```
+
+---
+
+## Compaction handoff update — SSH / remote shell path boundary
+
+Important boundary for Windows workspace + SSH-to-Linux workflows:
+
+```text
+Paths printed by an SSH remote command are remote/external evidence by default.
+They must not be automatically canonicalized to ${REPO}/... unless a future trusted remote workspace mapping is explicitly configured.
+```
+
+Example:
+
+```text
+Local Windows repo:
+C:\Users\MSI-\project
+
+Command:
+ssh user@linux "cd /home/user/project && npm test"
+
+Remote output:
+/home/user/project/src/auth.ts
+```
+
+Do not automatically store this as:
+
+```text
+${REPO}/src/auth.ts
+```
+
+because the remote path might be another clone, different commit, different branch, dirty worktree, Docker/CI path, or unrelated directory.
+
+Canonicalization rule:
+
+```text
+Only paths strictly under the current local repo root may become ${REPO}/...
+SSH / Docker / CI / remote shell absolute paths default to external/remote evidence.
+```
+
+Local edit detection rule:
+
+```text
+ssh remote command changed remote files only -> Run recorded, Edit none.
+Only generate a local edit if the current local worktree git diff changes after the run.
+```
+
+Future support for remote repo mapping must be explicit opt-in, e.g. trusted remote workspace config with host + remote_repo_root + local_repo_root. Do not infer it from matching directory names or paths in terminal output.
+
+---
+
+## Compaction handoff update — menu-first Hutao usage workflows landed
+
+The menu-first usage-level workflow has been implemented for common Hutao operations.
+
+New/enhanced user entrypoints:
+
+```text
+/hutao opens the Hutao main menu and is equivalent to /action.
+/action with no args opens the main menu.
+/action session|prompting|edit|run with no id opens the corresponding selector.
+/run with no id opens a run selector and then shows run details.
+/git with no args opens a Git actions menu: status, graph, scan, stage-trace, commit detail.
+/fork with no args opens source type -> item/ref -> mode selection.
+/merge session with no source id opens source session selection and then merge wizard.
+```
+
+Merge safety UX:
+
+```text
+history-only, apply-edits, and apply-tree merge flows now preview and confirm before executing.
+Merge wizard Import History / Apply Edits / Apply Final Snapshot also preview + confirm.
+Wizard conflict flow Skip Last Conflict and Continue confirms before continuing apply-edits.
+Preview remains code-safe and does not apply changes.
+```
+
+Tests added/updated:
+
+```text
+integration.test.ts now verifies /action main menu -> Runs detail, /action -> Git graph, /merge session source picker -> wizard preview, and /merge session --history source picker + confirm + native hutao_merge entry.
+```
+
+Verification passed:
+
+```text
+npm test --workspace hutao-agent -- test/hutao/integration.test.ts  # 13/13 passed
+npm test --workspace hutao-agent -- test/hutao/core.test.ts         # 26/26 passed
+npm run check                                                       # passed
+npm run build --workspace hutao-agent                               # passed
+```
+
+Accurate claim:
+
+```text
+Common Hutao trace/session/prompting/edit/run/git/fork/merge operations now have menu-first entrypoints with preview/confirm protection for merge operations that import history or modify code.
+```
+
+Still not claimed:
+
+```text
+Full custom TUI app-style UI is complete.
+All merge/revert conflicts can be auto-resolved.
+All Phase D/E/F goals are complete.
+```

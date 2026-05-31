@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalizePath, getCwdRelativePath, isLocalPath, normalizePath, resolvePath } from "../src/utils/paths.ts";
+import { createDirectoryLinkForTest, createFileLinkForTest } from "./link-test-utils.ts";
 
 let tempDir: string;
 
@@ -32,8 +33,8 @@ describe("canonicalizePath", () => {
 		const target = join(dir, "target.txt");
 		const link = join(dir, "link.txt");
 		writeFileSync(target, "hello");
-		symlinkSync(target, link);
-		expect(canonicalizePath(link)).toBe(realpathSync(target));
+		const linkType = createFileLinkForTest(target, link);
+		expect(canonicalizePath(link)).toBe(linkType === "hardlink" ? realpathSync(link) : realpathSync(target));
 	});
 
 	it("resolves directory symlinks", () => {
@@ -41,7 +42,7 @@ describe("canonicalizePath", () => {
 		const targetDir = join(dir, "target-dir");
 		const linkDir = join(dir, "link-dir");
 		mkdirSync(targetDir);
-		symlinkSync(targetDir, linkDir, "dir");
+		createDirectoryLinkForTest(targetDir, linkDir);
 		expect(canonicalizePath(linkDir)).toBe(realpathSync(targetDir));
 	});
 
@@ -55,8 +56,14 @@ describe("canonicalizePath", () => {
 		const dir = createTempDir();
 		const target = join(dir, "target.txt");
 		const link = join(dir, "link.txt");
-		// Create a symlink whose target does not exist.
-		symlinkSync(target, link);
+		// Create a symlink whose target does not exist. Hard links cannot represent
+		// this case, so skip when the current platform cannot create file symlinks.
+		try {
+			createFileLinkForTest(target, link);
+		} catch (error) {
+			if (process.platform === "win32" && error instanceof Error && "code" in error) return;
+			throw error;
+		}
 		// realpathSync would throw, so canonicalizePath returns the link path.
 		expect(canonicalizePath(link)).toBe(link);
 	});

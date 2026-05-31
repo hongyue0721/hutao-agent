@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,6 +11,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
+import { createDirectoryLinkForTest } from "./link-test-utils.ts";
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -172,8 +173,8 @@ Project skill`,
 
 			mkdirSync(agentDir, { recursive: true });
 			mkdirSync(join(cwd, ".pi"), { recursive: true });
-			symlinkSync(sharedExtDir, join(agentDir, "extensions"), "dir");
-			symlinkSync(sharedExtDir, join(cwd, ".pi", "extensions"), "dir");
+			createDirectoryLinkForTest(sharedExtDir, join(agentDir, "extensions"));
+			createDirectoryLinkForTest(sharedExtDir, join(cwd, ".pi", "extensions"));
 
 			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();

@@ -1,10 +1,10 @@
-import { access, chmod, realpath, symlink } from "node:fs/promises";
+import { access, chmod, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { FileError, getOrThrow } from "../../src/harness/types.ts";
 import { executeShellWithCapture } from "../../src/harness/utils/shell-output.ts";
-import { createTempDir } from "./session-test-utils.ts";
+import { createDirectoryLink, createFileLink, createTempDir } from "./session-test-utils.ts";
 
 const chmodRestorePaths: string[] = [];
 
@@ -50,8 +50,8 @@ describe("NodeExecutionEnv", () => {
 		const env = new NodeExecutionEnv({ cwd: root });
 		getOrThrow(await env.createDir("dir", { recursive: true }));
 		getOrThrow(await env.writeFile("dir/file.txt", "hello"));
-		await symlink(join(root, "dir/file.txt"), join(root, "file-link"));
-		await symlink(join(root, "dir"), join(root, "dir-link"));
+		const fileLinkKind = await createFileLink(join(root, "dir/file.txt"), join(root, "file-link"));
+		await createDirectoryLink(join(root, "dir"), join(root, "dir-link"));
 
 		expect(getOrThrow(await env.fileInfo("dir"))).toMatchObject({
 			name: "dir",
@@ -67,27 +67,29 @@ describe("NodeExecutionEnv", () => {
 		expect(getOrThrow(await env.fileInfo("file-link"))).toMatchObject({
 			name: "file-link",
 			path: join(root, "file-link"),
-			kind: "symlink",
+			kind: fileLinkKind === "hardlink" ? "file" : "symlink",
 		});
 		expect(getOrThrow(await env.fileInfo("dir-link"))).toMatchObject({
 			name: "dir-link",
 			path: join(root, "dir-link"),
 			kind: "symlink",
 		});
-		expect(getOrThrow(await env.canonicalPath("file-link"))).toBe(await realpath(join(root, "dir/file.txt")));
+		const expectedCanonicalFileLink =
+			fileLinkKind === "hardlink" ? join(root, "file-link") : await realpath(join(root, "dir/file.txt"));
+		expect(getOrThrow(await env.canonicalPath("file-link"))).toBe(expectedCanonicalFileLink);
 	});
 
 	it("lists symlinks as symlinks", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
 		getOrThrow(await env.writeFile("target.txt", "hello"));
-		await symlink(join(root, "target.txt"), join(root, "link.txt"));
+		const linkKind = await createFileLink(join(root, "target.txt"), join(root, "link.txt"));
 
 		const entries = getOrThrow(await env.listDir("."));
 		expect(
 			entries.map((entry) => ({ name: entry.name, kind: entry.kind })).sort((a, b) => a.name.localeCompare(b.name)),
 		).toEqual([
-			{ name: "link.txt", kind: "symlink" },
+			{ name: "link.txt", kind: linkKind === "hardlink" ? "file" : "symlink" },
 			{ name: "target.txt", kind: "file" },
 		]);
 	});
@@ -194,7 +196,7 @@ describe("NodeExecutionEnv", () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
 		const result = getOrThrow(
-			await env.exec('printf \'%s:%s\' "$PWD" "$NODE_ENV_TEST"', {
+			await env.exec("node -e \"process.stdout.write(process.cwd() + ':' + process.env.NODE_ENV_TEST)\"", {
 				env: { NODE_ENV_TEST: "ok" },
 			}),
 		);

@@ -121,9 +121,17 @@ function createBunGlobalInstall(): { packageDir: string } {
 	return { packageDir };
 }
 
+function createFakeNpmScript(root: string): string {
+	if (process.platform === "win32") {
+		return `@echo off\r\nif "%~1"=="root" if "%~2"=="-g" echo ${root}\r\nif "%~1"=="--prefix" if "%~3"=="root" if "%~4"=="-g" echo ${root}\r\n`;
+	}
+	const escapedRoot = root.replaceAll("'", "'\\''");
+	return `#!/bin/sh\nif [ "$1" = "root" ] && [ "$2" = "-g" ]; then\n\tprintf '%s\\n' '${escapedRoot}'\n\texit 0\nfi\nif [ "$1" = "--prefix" ] && [ "$3" = "root" ] && [ "$4" = "-g" ]; then\n\tprintf '%s\\n' '${escapedRoot}'\n\texit 0\nfi\nexit 1\n`;
+}
+
 function createFakePnpmScript(root: string): string {
 	if (process.platform === "win32") {
-		return `@echo off\r\nif "%1"=="root" if "%2"=="-g" echo ${root}\r\n`;
+		return `@echo off\r\nif "%~1"=="root" if "%~2"=="-g" echo ${root}\r\n`;
 	}
 	const escapedRoot = root.replaceAll("'", "'\\''");
 	return `#!/bin/sh\nif [ "$1" = "root" ] && [ "$2" = "-g" ]; then\n\tprintf '%s\\n' '${escapedRoot}'\n\texit 0\nfi\nexit 1\n`;
@@ -131,7 +139,7 @@ function createFakePnpmScript(root: string): string {
 
 function createFakeYarnScript(globalDir: string): string {
 	if (process.platform === "win32") {
-		return `@echo off\r\nif "%1"=="global" if "%2"=="dir" echo ${globalDir}\r\n`;
+		return `@echo off\r\nif "%~1"=="global" if "%~2"=="dir" echo ${globalDir}\r\n`;
 	}
 	const escapedGlobalDir = globalDir.replaceAll("'", "'\\''");
 	return `#!/bin/sh\nif [ "$1" = "global" ] && [ "$2" = "dir" ]; then\n\tprintf '%s\\n' '${escapedGlobalDir}'\n\texit 0\nfi\nexit 1\n`;
@@ -139,7 +147,7 @@ function createFakeYarnScript(globalDir: string): string {
 
 function createFakeBunScript(bunBin: string): string {
 	if (process.platform === "win32") {
-		return `@echo off\r\nif "%1"=="pm" if "%2"=="bin" if "%3"=="-g" echo ${bunBin}\r\n`;
+		return `@echo off\r\nif "%~1"=="pm" if "%~2"=="bin" if "%~3"=="-g" echo ${bunBin}\r\n`;
 	}
 	const escapedBunBin = bunBin.replaceAll("'", "'\\''");
 	return `#!/bin/sh\nif [ "$1" = "pm" ] && [ "$2" = "bin" ] && [ "$3" = "-g" ]; then\n\tprintf '%s\\n' '${escapedBunBin}'\n\texit 0\nfi\nexit 1\n`;
@@ -214,6 +222,12 @@ describe("detectInstallMethod", () => {
 
 	test("self-update respects configured npmCommand", () => {
 		const { prefix } = createNpmPrefixInstall();
+		const binDir = join(prefix, "bin");
+		const root = join(prefix, "lib", "node_modules");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(join(binDir, process.platform === "win32" ? "npm.cmd" : "npm"), createFakeNpmScript(root));
+		chmodSync(join(binDir, process.platform === "win32" ? "npm.cmd" : "npm"), 0o755);
+		process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
 
 		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", ["npm", "--prefix", prefix]);
 
@@ -405,6 +419,11 @@ describe("detectInstallMethod", () => {
 	test("does not self-update when npm install path is not writable", () => {
 		const { packageDir } = createNpmPrefixInstall();
 		chmodSync(packageDir, 0o500);
+
+		if (process.platform === "win32") {
+			expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeDefined();
+			return;
+		}
 
 		expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeUndefined();
 		expect(getSelfUpdateUnavailableInstruction("@earendil-works/pi-coding-agent")).toContain(

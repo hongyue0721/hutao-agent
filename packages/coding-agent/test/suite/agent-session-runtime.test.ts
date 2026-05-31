@@ -312,7 +312,10 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(leafId).toBeTruthy();
 
 		const result = await runtime.fork(leafId!, { position: "at" });
-		expect(result).toEqual({ cancelled: false, selectedText: undefined });
+		expect(result.cancelled).toBe(false);
+		expect(result.selectedText).toBeUndefined();
+		expect(result.sessionFile).toBe(runtime.session.sessionFile);
+		expect(result.sessionFile).toBeDefined();
 		expect(runtime.session.sessionFile).not.toBe(previousSessionFile);
 		expect(
 			runtime.session.messages.map((message) => ({
@@ -424,7 +427,9 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(runtime.session.sessionFile).toBeUndefined();
 
 		const result = await runtime.fork(leafId!, { position: "at" });
-		expect(result).toEqual({ cancelled: false, selectedText: undefined });
+		expect(result.cancelled).toBe(false);
+		expect(result.selectedText).toBeUndefined();
+		expect(result.sessionFile).toBeUndefined();
 		expect(runtime.session.sessionFile).toBeUndefined();
 		expect(
 			runtime.session.messages.map((message) => ({

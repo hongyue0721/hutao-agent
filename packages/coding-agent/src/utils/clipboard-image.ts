@@ -254,6 +254,7 @@ async function readClipboardImageViaNativeClipboard(): Promise<ClipboardImage | 
 export async function readClipboardImage(options?: {
 	env?: NodeJS.ProcessEnv;
 	platform?: NodeJS.Platform;
+	isWsl?: boolean;
 }): Promise<ClipboardImage | null> {
 	const env = options?.env ?? process.env;
 	const platform = options?.platform ?? process.platform;
@@ -265,7 +266,7 @@ export async function readClipboardImage(options?: {
 	let image: ClipboardImage | null = null;
 
 	if (platform === "linux") {
-		const wsl = isWSL(env);
+		const wsl = options?.isWsl ?? isWSL(env);
 		const wayland = isWaylandSession(env);
 
 		if (wayland || wsl) {

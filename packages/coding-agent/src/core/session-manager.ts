@@ -336,10 +336,19 @@ function escapeRegExp(value: string): string {
 
 function sanitizeRepoLocalText(text: string, repoRoot: string): string {
 	const resolvedRepoRoot = resolvePath(repoRoot);
-	const variants = [...new Set([resolvedRepoRoot, resolvedRepoRoot.replace(/\\/g, "/")])].filter(Boolean);
+	const variants = [...new Set([resolvedRepoRoot, resolvedRepoRoot.replace(/\\/g, "/")])]
+		.filter(Boolean)
+		.sort((a, b) => b.length - a.length);
 	let result = text;
 	for (const variant of variants) {
-		result = result.replace(new RegExp(escapeRegExp(variant), "g"), REPO_PLACEHOLDER);
+		result = result.replace(
+			new RegExp(`${escapeRegExp(variant)}([\\\\/][^\\s"'\`<>)]*)?`, "g"),
+			(_match, suffix: string | undefined) => {
+				if (!suffix) return REPO_PLACEHOLDER;
+				const repoRelative = suffix.replace(/^[\\/]+/, "").replace(/\\/g, "/");
+				return repoRelative ? `${REPO_PLACEHOLDER}/${repoRelative}` : REPO_PLACEHOLDER;
+			},
+		);
 	}
 	result = result.replace(/[A-Za-z]:[\\/][^\s"'`<>)]*/g, "[external-path-redacted]");
 	result = result.replace(/(?:^|\s)\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/g, (match) => {
@@ -363,7 +372,14 @@ function sanitizeRepoLocalEntry<T>(entry: T, repoRoot: string): T {
 }
 
 function hydrateRepoLocalText(text: string, repoRoot: string): string {
-	return text.replaceAll(REPO_PLACEHOLDER, resolvePath(repoRoot));
+	const resolvedRepoRoot = resolvePath(repoRoot);
+	return text.replace(
+		new RegExp(`${escapeRegExp(REPO_PLACEHOLDER)}([\\\\/][^\\s"'\`<>)]*)?`, "g"),
+		(_match, suffix: string | undefined) => {
+			if (!suffix) return resolvedRepoRoot;
+			return resolvePath(suffix.replace(/^[\\/]+/, ""), resolvedRepoRoot);
+		},
+	);
 }
 
 function hydrateRepoLocalEntry<T>(entry: T, repoRoot: string): T {

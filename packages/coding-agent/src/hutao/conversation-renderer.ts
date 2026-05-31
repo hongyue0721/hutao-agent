@@ -105,10 +105,13 @@ export function renderConversationTimeline(snapshot: ConversationSnapshot, optio
 		return lines;
 	}
 	const items = snapshot.items.slice(-limit);
-	if (snapshot.items.length > items.length) lines.push(`... ${snapshot.items.length - items.length} older entries omitted`);
+	if (snapshot.items.length > items.length)
+		lines.push(`... ${snapshot.items.length - items.length} older entries omitted`);
 	for (const item of items) {
 		const entry = item.entry;
-		lines.push(`- ${entry.timestamp} ${shortId(entry.id)} ${renderEntryLabel(entry)} parent=${shortId(entry.parentId) || "root"}`);
+		lines.push(
+			`- ${entry.timestamp} ${shortId(entry.id)} ${renderEntryLabel(entry)} parent=${shortId(entry.parentId) || "root"}`,
+		);
 		const linkLine = renderLinks(item);
 		if (linkLine) lines.push(`  links: ${linkLine}`);
 		for (const body of renderEntryBody(entry)) {

@@ -124,7 +124,9 @@ function entryBody(entry: SessionEntry): string {
 	if (entry.type === "message") {
 		const message = entry.message as unknown as Record<string, unknown>;
 		if (message.role === "toolResult") {
-			return [`tool_call_id: ${String(message.toolCallId ?? "unknown")}`, textContent(message.content)].filter(Boolean).join("\n");
+			return [`tool_call_id: ${String(message.toolCallId ?? "unknown")}`, textContent(message.content)]
+				.filter(Boolean)
+				.join("\n");
 		}
 		if (message.role === "bashExecution") {
 			return [
@@ -196,7 +198,10 @@ export function buildConversationHydration(
 		"Timeline:",
 	];
 	const body = injectable
-		? selectedItems.map((item, index) => `--- entry ${index + 1}/${selectedItems.length} ---\n${renderHydrationEntry(item, policy)}`)
+		? selectedItems.map(
+				(item, index) =>
+					`--- entry ${index + 1}/${selectedItems.length} ---\n${renderHydrationEntry(item, policy)}`,
+			)
 		: [
 				"No complete native conversation entries are injectable.",
 				"Use /session <id> --conversation or trace/raw evidence views instead of fabricating chat history.",

@@ -392,7 +392,9 @@ class SessionList implements Component, Focusable {
 		if (!selected) return;
 
 		if (isRawOnlySession(selected.session)) {
-			this.onError?.("raw-only Hutao history is degraded evidence and cannot be deleted from the native session picker");
+			this.onError?.(
+				"raw-only Hutao history is degraded evidence and cannot be deleted from the native session picker",
+			);
 			return;
 		}
 
@@ -499,7 +501,8 @@ class SessionList implements Component, Focusable {
 				styledMsg = theme.bold(styledMsg);
 			}
 
-			const sourceColor = session.source === "repo-local" ? "accent" : session.source === "raw-only" ? "warning" : "dim";
+			const sourceColor =
+				session.source === "repo-local" ? "accent" : session.source === "raw-only" ? "warning" : "dim";
 			const styledSource = theme.fg(sourceColor, sourceLabel);
 			const leftPart = cursor + theme.fg("dim", prefix) + styledSource + styledMsg;
 			const leftWidth = visibleWidth(leftPart);
@@ -587,7 +590,9 @@ class SessionList implements Component, Focusable {
 			const selected = this.filteredSessions[this.selectedIndex];
 			if (selected) {
 				if (isRawOnlySession(selected.session)) {
-					this.onError?.("raw-only Hutao history is degraded evidence and cannot be renamed from the native session picker");
+					this.onError?.(
+						"raw-only Hutao history is degraded evidence and cannot be renamed from the native session picker",
+					);
 					return;
 				}
 				this.onRenameSession?.(selected.session.path);

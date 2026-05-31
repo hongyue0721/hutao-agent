@@ -252,7 +252,12 @@ describe("session selector path/delete interactions", () => {
 		const sessions = [
 			makeSession({ id: "repo", source: "repo-local", name: "Repo local" }),
 			makeSession({ id: "global", source: "global", name: "Global" }),
-			makeSession({ id: "raw", source: "raw-only", name: "Raw evidence", modified: new Date("2026-01-01T00:00:00.000Z") }),
+			makeSession({
+				id: "raw",
+				source: "raw-only",
+				name: "Raw evidence",
+				modified: new Date("2026-01-01T00:00:00.000Z"),
+			}),
 		];
 		const selectedPaths: string[] = [];
 		let errorMessage: string | undefined;

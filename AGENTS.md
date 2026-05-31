@@ -8,6 +8,32 @@
 
 ## 0. 最高优先级指令
 
+### 0.0 当前真实工作仓库目录
+
+当前实际代码仓库以以下目录为准：
+
+```text
+D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+```
+
+注意：
+
+```text
+D:/OneDrive/Desktop/hutao-agent
+```
+
+目前不是完整 Git 代码仓库，只包含项目说明文件，不应作为代码修改、测试、README 重写或 Git 操作的目标目录。
+
+每次开始修改、测试、重写 README 或执行 Git 命令前，必须先确认当前目录是：
+
+```bash
+cd /d/OneDrive/Desktop/hutao-agent.__tmp_inspect
+pwd
+git status -sb
+```
+
+如果 `git status` 报 `not a git repository`，说明走错目录，必须立刻停止并切回真实仓库。
+
 你正在把 `earendil-works/pi` 魔改为一个新的 coding agent：
 
 ```text
@@ -3047,3 +3073,1391 @@ agent 做了哪些 run
 一句话结束：
 
 > hutao-agent 要让仓库不只保存代码，也保存这个项目被人和 AI 一步步做出来的上下文。
+
+---
+
+## 31. 压缩交接记录 / 2026-05-31 full-suite repair handoff
+
+本节是一次对话压缩前的执行交接记录，用于让下一个 agent 继续工作时快速恢复上下文。它不替代前文产品规则；如果本节与前文规则冲突，仍以前文规则为准。
+
+### 31.1 最近已完成并推送的 repo-local native resume 工作
+
+已推送到 `origin/main` 的最近提交：
+
+```text
+223ecab test(hutao): validate repo-local resume across clone paths
+9d582a3 test(hutao): verify repo-local resume persists to hutao
+c52cb63 feat(hutao): improve repo-local resume startup notice
+57ecdec feat(hutao): label raw-only resume sessions
+c7e8748 feat(hutao): add conversation hydration menu flow
+```
+
+这些提交完成了 Phase B repo-local/native resume 基础验收：
+
+```text
+1. resume/session selector 显示 [repo-local] / [global] / [raw-only]。
+2. raw-only Hutao history 可见但不能伪装成 native chat resume。
+3. 启动时发现 .hutao/sessions 后提示 repo-local resumable sessions 与 raw-only history。
+4. SessionManager.open(repo-local native-session.jsonl) 后继续 append 会写回同一个 .hutao/sessions/<id>/native-session.jsonl。
+5. clone/copy 到新路径后，repo-local native session 能 list/open/continue，${REPO} hydrate 到当前 clone path，磁盘不泄漏旧 repo root。
+```
+
+已通过并推送前验证过的 targeted tests：
+
+```bash
+npx vitest run \
+  packages/coding-agent/test/session-manager/file-operations.test.ts \
+  packages/coding-agent/test/session-selector-path-delete.test.ts \
+  packages/coding-agent/test/hutao/core.test.ts \
+  packages/coding-agent/test/hutao/integration.test.ts \
+  packages/coding-agent/test/extensions-runner.test.ts
+```
+
+当时结果：
+
+```text
+5 test files passed
+103 tests passed
+npm run build passed
+```
+
+### 31.2 当前验收环境与副作用
+
+Windows 工作区：
+
+```text
+D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+```
+
+WSL fresh clone：
+
+```text
+/home/hongyue/hutao-agent-wsl-test
+```
+
+WSL 环境：
+
+```text
+Ubuntu 26.04 LTS
+node v24.16.0 via nvm
+npm 11.13.0
+```
+
+注意：验收命令产生过工作区副作用，下一轮修复前应先确认/清理。
+
+Windows 工作区当前有验收副作用：
+
+```text
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts
+9 个 Hutao 相关文件被 npm run check / biome --write 格式化
+```
+
+WSL clone 中也有类似副作用：
+
+```text
+npm run check 自动格式化 9 个文件
+npm run build 重新生成 packages/ai/src/models.generated.ts 和 image-models.generated.ts
+```
+
+如果开始正式修复，建议先在 WSL clone 中建立干净分支：
+
+```bash
+cd /home/hongyue/hutao-agent-wsl-test
+git fetch origin
+git reset --hard origin/main
+git clean -fd
+git checkout -B fix/full-test-suite-wsl
+npm install --ignore-scripts
+npm run build
+```
+
+不要把 generated model 更新或 biome 格式化副作用混进不相关修复提交；格式化如需提交，应单独做 `chore(format)`。
+
+### 31.3 WSL 全量测试现状
+
+在 WSL fresh clone 上执行顺序：
+
+```bash
+npm install --ignore-scripts
+npm run check
+npm run build
+npm test
+```
+
+`npm run check` 结果：
+
+```text
+passed
+但会执行 biome check --write 并格式化 9 个文件
+```
+
+`npm run build` 结果：
+
+```text
+passed
+但会重新生成 packages/ai/src/models.generated.ts 与 image-models.generated.ts
+```
+
+`npm test` 在 build 后结果：
+
+```text
+Test Files: 7 failed, 122 passed, 6 skipped
+Tests:      14 failed, 1338 passed, 44 skipped
+```
+
+全量测试尚未绿，不能对外声称 full suite passed。
+
+### 31.4 WSL 剩余 14 个失败分类
+
+#### A. `clipboard-image.test.ts` — WSL clipboard 测试隔离问题
+
+失败数：2
+
+```text
+readClipboardImage > Non-Wayland: uses clipboard
+readClipboardImage > Non-Wayland: returns null when clipboard has no image
+```
+
+原因：
+
+```text
+测试传入 readClipboardImage({ platform: "linux", env: {} }) 试图模拟普通 Linux，
+但 isWSL() 仍会读取 /proc/version 并识别当前进程在 WSL 内，
+于是代码走 wl-paste/xclip/PowerShell fallback，而测试期待 native clipboard path。
+```
+
+修复方向不要简单 skip。建议让 clipboard 读取逻辑支持可测试的环境隔离，例如：
+
+```text
+1. 给 readClipboardImage options 增加 isWslOverride / commandRunner / nativeClipboard 之类依赖注入；或
+2. 把 isWSL(env) 调整为当 options.env 显式传入时不再读取真实 /proc/version；或
+3. 抽出 ClipboardEnvironmentDetector，单测可稳定模拟 Wayland/X11/WSL/non-Wayland。
+```
+
+目标是可扩展地覆盖：
+
+```text
+Wayland Linux
+X11 Linux
+WSL
+普通 non-Wayland Linux
+Windows/macOS native clipboard
+```
+
+#### B. `package-command-paths.test.ts` — `pi` -> `hutao` rename / self-update 策略漂移
+
+失败数：6
+
+明显失败：
+
+```text
+测试期待: pi install <source> [-l]
+实际输出: hutao install <source> [-l]
+```
+
+还有 self-update 相关失败：
+
+```text
+uses the current package name when the update check omits packageName
+installs the active package name from the update check during self-update
+fails self-update when renamed npm package installation fails
+```
+
+修复方向不要只硬编码字符串。应先读并统一：
+
+```text
+src/config.ts
+src/main.ts
+src/utils/version-check.ts
+test/package-command-paths.test.ts
+```
+
+原则：
+
+```text
+1. 测试应使用 APP_NAME / PACKAGE_NAME / ENV_AGENT_DIR 等常量，而不是散落 "pi" / "hutao"。
+2. 明确 Hutao 当前 self-update 策略：是否默认禁用 version check、是否允许 active packageName 替换、rename uninstall old package 是否仍是产品需求。
+3. 如果产品策略是 Hutao 不沿用 Pi 的远端 update check，则测试应改成 Hutao 策略。
+4. 如果实现逻辑和产品策略不一致，再修实现，不要只改测试。
+```
+
+#### C. `theme-export.test.ts` 与 `theme-picker.test.ts` — 旧 env var 遗留
+
+失败数：3
+
+原因：
+
+```text
+测试写入 PI_CODING_AGENT_DIR，但 Hutao 当前 config 使用 APP_NAME 推导 env var，
+即 ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`，当前应为 HUTAO_CODING_AGENT_DIR。
+```
+
+修复方向：
+
+```text
+1. 测试 import ENV_AGENT_DIR，不要硬编码 PI_CODING_AGENT_DIR 或 HUTAO_CODING_AGENT_DIR。
+2. theme custom dir 相关实现继续通过 getAgentDir()/getCustomThemesDir() 获取路径。
+3. 确认 setRegisteredThemes / env stub / cache 行为在测试间正确 reset。
+```
+
+#### D. `agent-session-runtime.test.ts` — fork 返回值 shape 更新
+
+失败数：1
+
+原因：
+
+```text
+runtime.fork(...) 现在返回 { cancelled, selectedText, sessionFile }，
+测试仍期待 { cancelled, selectedText }。
+```
+
+修复方向：
+
+```text
+1. 不要用宽松 expect.anything 糊过去。
+2. 显式验证 sessionFile 存在且等于/指向新的 fork session file。
+3. 同时验证 old session file 未被继续写入，new fork session file 被使用。
+4. 如果 sessionFile 是新的 API 契约，确认类型定义和调用方均一致。
+```
+
+#### E. `package-manager.test.ts` — GitHub URL 测试 timeout / 外部依赖
+
+失败数：1
+
+失败测试：
+
+```text
+DefaultPackageManager > source parsing > should recognize github URLs without git: prefix
+```
+
+原因：
+
+```text
+测试处理 nonexistent GitHub repo，WSL 中超时 30000ms。
+```
+
+修复方向：
+
+```text
+1. 不要依赖真实 GitHub 网络或不存在仓库的超时行为。
+2. 将 git clone / package resolution 抽为可 mock 的 command runner，或在测试里使用本地 bare git repo/file URL。
+3. 目标是验证 URL parsing，而不是验证 GitHub 网络失败速度。
+```
+
+#### F. `2791-fswatch-error-crash.test.ts` — FSWatcher 时序/环境敏感
+
+失败数：1
+
+原因：
+
+```text
+子进程报 no FSWatcher found among active handles。
+```
+
+修复方向：
+
+```text
+1. 不要简单扩大 timeout。
+2. 让测试显式等待 watcher ready 信号，或让 theme watcher/FSWatcher 可注入。
+3. 如果在 noThemes 或测试环境不创建 watcher，应调整测试 setup 明确启用 watcher。
+4. 目标是稳定验证 "FSWatcher error event 不会 crash process"。
+```
+
+### 31.5 下一轮修复策略
+
+用户已明确要求：
+
+```text
+开启全量修复，不要最小化收口，而是可迭代、可拓展的修复。
+```
+
+下一轮应该按类别修复，而不是一次性硬改所有断言。
+
+建议分支：
+
+```bash
+git checkout -B fix/full-test-suite-wsl
+```
+
+建议提交拆分：
+
+```text
+test(cli): align package command tests with hutao naming constants
+test(theme): use agent dir env constants for custom themes
+test(clipboard): isolate WSL clipboard detection
+test(runtime): assert fork sessionFile result
+test(package-manager): make github URL parsing deterministic
+test(watcher): stabilize fswatch regression
+chore(format): apply biome formatting
+```
+
+如果需要改产品代码，则使用 `fix(...)` 并单独提交，例如：
+
+```text
+fix(clipboard): make WSL detection injectable for tests
+fix(package-manager): avoid network-dependent github URL parsing test path
+```
+
+### 31.6 下一轮最小验收序列
+
+每修一类先跑对应文件，例如：
+
+```bash
+cd /home/hongyue/hutao-agent-wsl-test
+npm test -- packages/coding-agent/test/package-command-paths.test.ts
+npm test -- packages/coding-agent/test/theme-export.test.ts packages/coding-agent/test/theme-picker.test.ts
+npm test -- packages/coding-agent/test/clipboard-image.test.ts
+npm test -- packages/coding-agent/test/suite/agent-session-runtime.test.ts
+npm test -- packages/coding-agent/test/package-manager.test.ts
+npm test -- packages/coding-agent/test/suite/regressions/2791-fswatch-error-crash.test.ts
+```
+
+阶段性跑：
+
+```bash
+npm run check
+npm run build
+npm test
+```
+
+最后还要重新跑 Hutao 相关 targeted tests，防止全量修复破坏 repo-local/native resume：
+
+```bash
+npx vitest run \
+  packages/coding-agent/test/session-manager/file-operations.test.ts \
+  packages/coding-agent/test/session-selector-path-delete.test.ts \
+  packages/coding-agent/test/hutao/core.test.ts \
+  packages/coding-agent/test/hutao/integration.test.ts \
+  packages/coding-agent/test/extensions-runner.test.ts
+```
+
+### 31.7 汇报原则
+
+后续汇报必须区分：
+
+```text
+1. Targeted Hutao tests passed
+2. npm run check passed
+3. npm run build passed
+4. full npm test passed
+5. AGENTS.md roadmap completed
+```
+
+不要把 targeted tests passed 说成 full suite passed。不要把 Phase B 完成说成 AGENTS.md 全部完成。
+
+---
+
+## 32. 最新交接记录 / 2026-05-31 cross-platform validation status
+
+本节是在 31 节之后追加的更新交接，目的是修正“WSL 还有 14 个失败”这一旧状态。时间线保留，旧记录不删除；后续 agent 如果需要当前状态，以本节为准。
+
+### 32.1 当前分支与已提交修复
+
+当前工作分支：
+
+```text
+fix/full-test-suite-wsl
+```
+
+当前已提交的修复 commit：
+
+```text
+d87363f test(coding-agent): make platform regressions cross-platform
+0cf5b0e test(coding-agent): stabilize hutao rename full-suite regressions
+72f8a28 fix(clipboard): make WSL detection test-isolatable
+146cef4 fix(bash): wait for persisted full-output files
+e8e0ed0 chore(format): apply biome formatting to hutao resume files
+39c95c3 docs(agent): record full-suite repair handoff
+```
+
+说明：
+
+```text
+1. d87363f 是在 0cf5b0e 之后新增的 Windows 跨平台测试修复。
+2. 该 commit 解决的是“普通 Windows 没有 symlink 权限”以及“Windows ESM 绝对路径 import”类问题。
+3. 当前 Windows 工作区仍有 1 个未提交改动：packages/tui/test/autocomplete.test.ts。
+4. 该未提交改动属于 Windows 通用链接测试修复，不是 machine-specific hack。
+```
+
+### 32.2 WSL / Linux 当前状态
+
+已验证环境：
+
+```text
+WSL Ubuntu 26.04 LTS
+node v24.16.0 via nvm
+npm 11.13.0
+```
+
+当前结论：
+
+```text
+WSL / Linux 已验证环境全绿。
+```
+
+已通过：
+
+```bash
+npm run check
+npm run build
+npm test
+```
+
+并且以下两组 targeted 验证通过：
+
+```text
+1. 原 7 个失败文件 targeted 通过。
+2. Hutao repo-local/native resume targeted 通过。
+```
+
+不要过度表述为“所有 Linux 发行版 100% 没问题”。准确表述应为：
+
+```text
+当前已经验证的 Linux/WSL 环境全绿。
+```
+
+### 32.3 Windows 当前状态
+
+当前结论：
+
+```text
+Windows 不是全绿，但已经明显收敛。
+```
+
+当前已通过：
+
+```text
+1. 原 7 个失败文件 targeted 通过。
+2. Hutao targeted 通过。
+3. npm run check 通过。
+4. npm run build 通过。
+```
+
+当前未通过：
+
+```text
+Windows full npm test 仍未全绿。
+```
+
+注意：不要把“Windows targeted + check + build 通过”说成“Windows full suite passed”。
+
+### 32.4 Windows 当前剩余失败的真实性质
+
+这些失败已经不是本轮 Hutao repo-local/native resume 目标本身的失败，而是更广泛的跨平台历史问题。主要类别如下：
+
+```text
+1. symlink / junction / hard link 能力差异
+2. Windows path separator 与 relative-path 断言差异
+3. EPERM / EACCES 错误码差异
+4. rg / glob / shell 参数跨平台差异
+5. 一部分旧 self-update / config 预期未完全迁移
+6. agent-core / coding-agent / tui 的旧测试默认 Unix 语义
+```
+
+这意味着：
+
+```text
+1. 当前 Hutao 本轮修复在 WSL 是成立的。
+2. Windows 剩下的问题需要作为后续跨平台清理项目继续做。
+3. 这些问题不应通过 machine-specific if 分支规避，而应通过 capability detection、path helpers、error-code normalization、cross-platform argument construction 来修。
+```
+
+### 32.5 已采用的跨平台修复原则
+
+本轮已经验证过可接受的普遍环境修法：
+
+```text
+1. Windows ESM 绝对路径 import 改用 pathToFileURL(...).href。
+2. 目录链接测试优先 symlink，Windows 权限不足时 fallback 到 junction。
+3. 文件链接测试优先 symlink，Windows 权限不足时 fallback 到 hard link。
+4. WSL 检测通过显式 options 覆盖实现测试隔离，而不是依赖运行机器的真实 /proc/version。
+5. full-output temp file 刷盘通过等待 stream finish 解决，而不是测试里 sleep。
+```
+
+这些属于：
+
+```text
+capability-aware / cross-platform repair
+```
+
+不是：
+
+```text
+只针对当前这台 Windows 机器的特判
+```
+
+### 32.6 当前最准确对外说法
+
+允许说：
+
+```text
+1. 当前已验证的 WSL/Linux 环境全绿。
+2. Hutao 本轮 repo-local/native resume 修复在 WSL 已完成验收。
+3. Windows 相关 targeted / check / build 已通过。
+4. Windows full suite 仍有跨平台历史问题待清理。
+```
+
+不要说：
+
+```text
+1. 所有 Linux 都绝对没问题。
+2. Windows 也已经全绿。
+3. 所有 full suite 都通过。
+4. AGENTS.md 已全部完成。
+```
+
+### 32.7 下一位 agent 如果继续，只应做什么
+
+如果继续修 Windows full suite，应按下面优先级推进：
+
+```text
+1. agent harness / nodejs-env / prompt-templates / skills 的链接能力兼容
+2. path display / relative-path / ignore 输入的 Windows 归一化
+3. permission denied 断言统一接受 EACCES / EPERM
+4. rg / glob / shell 参数跨平台构造
+5. config/self-update 历史测试与 Hutao 当前策略统一
+```
+
+如果用户要求“先不修只分析”，当前最准确结论就是：
+
+```text
+Linux/WSL 已验证全绿；Windows full suite 仍未全绿，且剩余问题属于更广的跨平台历史问题，不是本轮 Hutao 目标本身的失败。
+```
+
+---
+
+## 33. 最新交接记录 / Windows full-suite repair completed
+
+本节是在 32 节之后追加的更新交接。32 节中的“Windows full npm test 仍未全绿”已经是旧状态；当前状态以本节为准。
+
+### 33.1 当前验证结果
+
+Windows 当前已通过：
+
+```text
+1. 旧 Windows 失败矩阵 targeted 通过。
+2. packages/agent harness targeted 通过：29/29。
+3. packages/coding-agent 旧失败文件 targeted 通过：143/143。
+4. npm run check 通过。
+5. npm run build 通过。
+6. npm test 全量通过。
+```
+
+其中 full `npm test` 尾部 TUI 汇总显示：
+
+```text
+tests 631
+suites 113
+pass 631
+fail 0
+```
+
+并且整条 `npm test` 命令没有失败退出。
+
+### 33.2 本轮 Windows 修复范围
+
+本轮继续修复了 32.7 中列出的 Windows full-suite 剩余项：
+
+```text
+1. agent-core harness 中 nodejs-env / prompt-templates / skills 的 Windows path 与 link 能力问题。
+2. coding-agent 中 paths / file-mutation-queue / resource-loader 的 symlink 权限问题。
+3. footer / sdk session manager 的 Windows path separator 与 Git Bash cwd 表示问题。
+4. tools 中 EPERM / EACCES 和 grep flag-like pattern 的跨平台测试问题。
+5. find tool 中 path-containing glob 在 Windows fd 下匹配不到的真实实现问题。
+6. config self-update tests 中 fake .cmd 参数引用与 chmod Windows 语义问题。
+7. interactive suspend tests 中需要显式模拟 linux/win32 platform 分支的问题。
+```
+
+### 33.3 重要实现修复
+
+```text
+1. packages/agent/src/harness/env/nodejs.ts
+   - fileInfo name 改用 node:path basename，修复 Windows 下 name 可能包含整段路径的问题。
+
+2. packages/agent/src/harness/skills.ts
+   - env path helper 支持 / 与 \，避免 Windows 绝对路径被传入 ignore.ignores()。
+
+3. packages/agent/src/harness/prompt-templates.ts
+   - basename helper 支持 / 与 \。
+
+4. packages/coding-agent/src/core/tools/find.ts
+   - path-containing glob 不再依赖 fd --full-path 的跨平台行为。
+   - 先由 fd 枚举候选，再用 minimatch 对 POSIX relative path 做最终过滤。
+```
+
+### 33.4 测试基建修复
+
+新增：
+
+```text
+packages/coding-agent/test/link-test-utils.ts
+```
+
+用于统一测试链接能力：
+
+```text
+1. directory link: symlink -> junction fallback on Windows
+2. file link: symlink -> hard link fallback on Windows
+```
+
+同类 helper 也加到了：
+
+```text
+packages/agent/test/harness/session-test-utils.ts
+```
+
+注意：这些是 capability-aware 修复，不是 machine-specific hack。
+
+### 33.5 Build side effects
+
+`npm run build` 会重新生成：
+
+```text
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts
+```
+
+本轮已在验证后恢复这两个文件，避免把无关模型数据变动混进跨平台修复 diff。
+
+### 33.6 当前准确对外说法
+
+允许说：
+
+```text
+当前已验证的 WSL/Linux 环境全绿。
+当前 Windows 环境也已通过 npm run check、npm run build、npm test。
+旧 Windows full-suite 跨平台失败矩阵已经收住。
+```
+
+仍然不要过度说：
+
+```text
+所有 Linux 发行版和所有 Windows 机器都 100% 保证无问题。
+AGENTS.md 全部产品路线已经完成。
+```
+
+---
+
+## 34. 最新交接记录 / Windows-to-Linux session portability boundary
+
+本节补充 Windows 平台开发产生的 Hutao 会话迁移到 Linux/WSL 时的准确边界，避免后续 agent 把“跨平台可恢复上下文”误说成“自动转译并复现所有 Windows shell 行为”。
+
+### 34.1 当前可以确认的能力
+
+当前架构和本轮修复已经支持/验证到以下程度：
+
+```text
+1. .hutao 中 canonical path 的产品规则仍是 repo-relative POSIX path。
+2. Windows 与 WSL/Linux 的 check/build/full npm test 当前已在各自验证环境中通过。
+3. repo-local/native resume 相关 targeted tests 已通过。
+4. clone-path 类测试已覆盖“不同 repo path 后仍可读取 repo-local session”的关键语义。
+5. Windows 路径、symlink/junction/hardlink、fd glob、Git Bash cwd、EPERM/EACCES 等跨平台测试问题已收敛。
+```
+
+因此，允许的准确表述是：
+
+```text
+Windows 平台开发产生的 Hutao repo-local session / trace，设计上应可在 Linux/WSL clone 后被读取、展示、resume，并继续写回 .hutao。
+```
+
+### 34.2 不能过度承诺的能力
+
+不要说：
+
+```text
+1. Windows 里跑过的每一条历史 bash/powershell/cmd 命令都会自动转译成 Linux 命令。
+2. raw terminal output 中出现的 Windows 绝对路径会全部被改写成 Linux 绝对路径。
+3. 所有 Linux 发行版、所有 shell、所有工具版本都 100% 保证无问题。
+4. 可以 100% 复现模型当时状态或当时运行环境。
+```
+
+正确边界是：
+
+```text
+Hutao 迁移和恢复的是项目级 AI 开发上下文：prompting / run / edit / patch / native conversation。
+Hutao 不承诺自动把历史 Windows shell 行为转译成 Linux shell 行为。
+历史 raw 文本是证据，不是可执行 instruction。
+```
+
+### 34.3 仍未完成的硬验收
+
+虽然当前单元/集成测试和 full-suite 已经跨平台收敛，但还没有在本轮最后执行完整的真实端到端流程：
+
+```bash
+# Windows
+mkdir demo
+cd demo
+git init
+hutao
+# 完成至少一次包含 assistant message、tool call、edit 的对话
+git add .hutao .
+git commit -m "demo hutao trace"
+git push
+
+# Linux / WSL
+git clone <repo> demo-clone
+cd demo-clone
+hutao
+# resume repo-local session
+# 继续输入
+# 确认新数据写回 .hutao
+```
+
+因此当前只能说：
+
+```text
+跨平台迁移设计、路径策略、repo-local/native resume 相关测试、Windows/WSL full-suite 验证已经就绪。
+真实 Windows -> Linux clone/resume/writeback 端到端人工验收尚未在本轮完成。
+```
+
+### 34.4 后续如果要补硬验收
+
+建议后续专门做一个小 demo repo，验证：
+
+```text
+1. Windows 创建 Hutao session。
+2. .hutao/sessions/<id>/session.json、events.jsonl、native-session 相关文件写入。
+3. 所有 canonical paths 为 repo-relative POSIX path。
+4. Git commit 后在 Linux/WSL clone。
+5. hutao resume picker 显示 repo-local session。
+6. 打开后能看到原 native conversation message/tool/edit entries。
+7. 继续输入后新 prompting/run/edit 写回当前 clone 的 .hutao。
+8. 不把历史 session 文本提升为 system instruction。
+```
+
+只有这个流程通过后，才可以升级表述为：
+
+```text
+已实际验收 Windows 产生的 Hutao 会话可在该 Linux/WSL 环境中 resume 并继续写回。
+```
+
+---
+
+## 35. 最新交接记录 / Windows-to-WSL portability acceptance passed
+
+本节更新 34 节中“真实 Windows -> Linux/WSL clone/resume/writeback 端到端人工验收尚未完成”的状态。该验收已经在本轮通过，并且发现并修复了一个真实 portability bug。
+
+### 35.1 验收流程
+
+本轮执行了一个无网络、无真实 provider 的临时 demo 验收：
+
+```text
+1. Windows 侧创建临时 git repo。
+2. Windows 侧用 built dist SessionManager 创建 repo-local Hutao native session。
+3. 用户与 assistant 消息中包含 Windows repo 下的绝对文件路径。
+4. 验证 native-session.jsonl 磁盘内容不包含 Windows repo root。
+5. 验证 native-session.jsonl 使用 ${REPO}/src/hello.ts 这种 repo-relative POSIX placeholder。
+6. git commit demo repo。
+7. 将 repo 复制为 Linux/WSL clone 路径。
+8. WSL 侧用 Node + built dist SessionManager 调用 listForResume。
+9. WSL 侧打开 repo-local session。
+10. 验证 ${REPO}/src/hello.ts 被 hydrate 成 WSL clone 当前路径。
+11. WSL 侧继续 append user/assistant messages。
+12. 验证新消息写回 clone 的 .hutao/sessions/<id>/native-session.jsonl。
+13. 验证写回后的 native-session.jsonl 仍不泄漏 Windows repo root 或 WSL clone absolute root。
+```
+
+WSL 验收输出：
+
+```json
+{
+  "ok": true,
+  "source": "repo-local",
+  "sessionId": "sess_019e7d64-218a-714f-aea1-145a278ee2e4",
+  "cloneRepo": "/mnt/c/Users/MSI-/AppData/Local/Temp/hutao-portability-1780220174571/linux-clone",
+  "sessionFile": "/mnt/c/Users/MSI-/AppData/Local/Temp/hutao-portability-1780220174571/linux-clone/.hutao/sessions/sess_019e7d64-218a-714f-aea1-145a278ee2e4/native-session.jsonl",
+  "messageCount": 4
+}
+```
+
+### 35.2 Bug found and fixed
+
+第一次验收失败时发现：
+
+```text
+${REPO} 被替换成 WSL clone root，但 Windows repo-relative suffix 保留了 backslash。
+```
+
+失败形态：
+
+```text
+/mnt/c/.../linux-clone\src\hello.ts
+```
+
+根因：
+
+```text
+sanitizeRepoLocalText 只替换 repo root 为 ${REPO}，没有把 repo-relative suffix canonicalize 为 POSIX slash。
+hydrateRepoLocalText 只简单 replace ${REPO}，没有把 suffix 按当前平台/base dir 重新 resolve。
+```
+
+修复：
+
+```text
+1. sanitizeRepoLocalText 写盘时把 repo-relative suffix 规范成 POSIX：${REPO}/src/hello.ts。
+2. hydrateRepoLocalText 读回时将 ${REPO}/src/hello.ts 解析为当前 clone 平台路径。
+3. session-manager/file-operations.test.ts 增强断言，禁止 ${REPO}\src\... 这种 Windows suffix 写入 native session。
+```
+
+### 35.3 当前准确表述
+
+现在允许说：
+
+```text
+在本轮验证的 Windows -> WSL 临时 demo 中，Windows 创建的 repo-local Hutao native session 可以在 WSL clone 路径中 listForResume、open、hydrate 当前路径、继续写回 .hutao，并且不泄漏旧 Windows repo root 或新 WSL clone absolute root。
+```
+
+仍然不要过度说：
+
+```text
+所有 Linux 发行版、所有 shell、所有文件系统组合都 100% 保证。
+历史 Windows shell 命令会自动转译为 Linux 命令。
+```
+
+---
+
+## 36. 设计补充 / Linux 与 Windows 文件路径转译模型
+
+本节记录 Hutao 跨平台路径转译的核心设计，方便压缩上下文后继续保持一致。
+
+### 36.1 不做绝对路径互译
+
+不要把路径转译理解成：
+
+```text
+Windows absolute path -> Linux absolute path
+C:\Users\Alice\project\src\a.ts -> /home/alice/project/src/a.ts
+```
+
+这会非常脆弱：
+
+```text
+1. 用户名变化会坏。
+2. 盘符变化会坏。
+3. WSL mount 配置变化会坏。
+4. clone 到不同目录会坏。
+5. Linux 发行版 / shell / 文件系统差异会坏。
+```
+
+正确模型是三段式：
+
+```text
+absolute path -> repo-relative POSIX canonical path -> current-platform resolved path
+```
+
+示例：
+
+```text
+Windows:
+C:\repo\src\a.ts
+        ↓
+src/a.ts
+        ↓
+Linux / WSL:
+/home/me/repo/src/a.ts
+```
+
+中间的 `src/a.ts` 才是 `.hutao` 应保存的稳定事实。
+
+### 36.2 三层路径职责
+
+Hutao 内部必须区分三层路径：
+
+```text
+1. canonical path
+   - 写入 .hutao 的事实路径。
+   - 必须是 repo-relative POSIX slash。
+   - 示例：src/auth.ts、packages/api/index.ts。
+
+2. resolved path
+   - 当前机器运行时可访问的真实路径。
+   - 由当前 repo root + canonical path 计算。
+   - Windows 示例：C:\repo\src\auth.ts。
+   - Linux 示例：/home/me/repo/src/auth.ts。
+
+3. display path
+   - 展示给用户看的路径。
+   - 可以根据 UI 需要缩短、加颜色、显示为 repo://src/auth.ts 或 src/auth.ts。
+```
+
+不要把 resolved path 写进 `.hutao` 当事实来源。
+
+### 36.3 写入规则：absolute -> canonical
+
+当 agent 在 Windows 上看到：
+
+```text
+C:\Users\MSI-\project\src\hello.ts
+```
+
+repo root 是：
+
+```text
+C:\Users\MSI-\project
+```
+
+写入 `.hutao` 前必须变成：
+
+```text
+src/hello.ts
+```
+
+如果是在 raw/native conversation 文本里，则写成：
+
+```text
+${REPO}/src/hello.ts
+```
+
+注意：`${REPO}` 后面的 repo-relative suffix 必须是 POSIX slash：
+
+```text
+正确：${REPO}/src/hello.ts
+错误：${REPO}\src\hello.ts
+```
+
+### 36.4 读取规则：canonical -> current platform resolved
+
+Linux/WSL clone 后 repo root 可能是：
+
+```text
+/mnt/c/Users/MSI-/project-clone
+```
+
+读取：
+
+```text
+${REPO}/src/hello.ts
+```
+
+hydrate 成当前机器路径：
+
+```text
+/mnt/c/Users/MSI-/project-clone/src/hello.ts
+```
+
+Windows 读取同一个 canonical path，则 hydrate 成：
+
+```text
+C:\Users\MSI-\project-clone\src\hello.ts
+```
+
+同一个 `.hutao` 事实路径，在不同平台 resolve 成不同本地路径。
+
+### 36.5 推荐 PathMapper 形态
+
+推荐抽象：
+
+```ts
+type CanonicalPath = string; // repo-relative POSIX, e.g. "src/hello.ts"
+
+class PathMapper {
+	constructor(private repoRoot: string) {}
+
+	toCanonical(inputPath: string): CanonicalPath | null {
+		const absolute = path.resolve(this.repoRoot, inputPath);
+		const relative = path.relative(this.repoRoot, absolute);
+
+		if (relative.startsWith("..") || path.isAbsolute(relative)) {
+			return null; // outside repo
+		}
+
+		return relative.replace(/\/g, "/");
+	}
+
+	toResolved(canonical: CanonicalPath): string {
+		return path.resolve(this.repoRoot, canonical);
+	}
+
+	redactText(text: string): string {
+		const rootVariants = [path.resolve(this.repoRoot), path.resolve(this.repoRoot).replace(/\/g, "/")];
+		let result = text;
+
+		for (const root of rootVariants) {
+			const escaped = escapeRegExp(root);
+			result = result.replace(new RegExp(`${escaped}([\\/][^\s"'<>)]*)?`, "g"), (_match, suffix = "") => {
+				const rel = suffix.replace(/^[\/]+/, "").replace(/\/g, "/");
+				return rel ? `\${REPO}/${rel}` : "\${REPO}";
+			});
+		}
+
+		return result;
+	}
+
+	hydrateText(text: string): string {
+		return text.replace(/\$\{REPO\}([\/][^\s"'<>)]*)?/g, (_match, suffix = "") => {
+			const rel = suffix.replace(/^[\/]+/, "");
+			return path.resolve(this.repoRoot, rel);
+		});
+	}
+}
+```
+
+核心规则：
+
+```ts
+relative.replace(/\/g, "/")       // 写入 .hutao 时统一 POSIX
+path.resolve(repoRoot, canonical)  // 读取时按当前平台解析
+```
+
+### 36.6 WSL 特殊情况
+
+WSL 中 Windows 磁盘路径可能是：
+
+```text
+/mnt/c/Users/MSI-/project
+```
+
+Windows 中同一个位置可能是：
+
+```text
+C:\Users\MSI-\project
+```
+
+Hutao 不应保存这两者之间的映射关系。正确做法仍然是：
+
+```text
+Windows 写入：${REPO}/src/hello.ts
+WSL 读取：当前 clone root + src/hello.ts
+```
+
+这样 repo 在以下任意位置都能恢复：
+
+```text
+C:\Users\MSI-\project
+/mnt/c/Users/MSI-/project
+/home/user/project
+/tmp/project
+```
+
+### 36.7 本轮实际修复案例
+
+真实 Windows -> WSL 验收第一次失败时出现：
+
+```text
+/mnt/c/.../linux-clone\src\hello.ts
+```
+
+原因是写盘内容等价于：
+
+```text
+${REPO}\src\hello.ts
+```
+
+修复后写盘为：
+
+```text
+${REPO}/src/hello.ts
+```
+
+读取时再按当前平台 resolve：
+
+```text
+Windows -> C:\...\repo\src\hello.ts
+WSL/Linux -> /mnt/c/.../repo/src/hello.ts
+```
+
+这就是 Hutao 应遵守的跨平台路径转译模型。
+
+---
+
+## 37. 设计补充 / SSH、远端 shell 与跨机器路径边界
+
+本节补充 36 节的跨平台路径转译边界，特别是 Windows 工作区通过 SSH 连接 Linux 环境执行操作的场景。
+
+### 37.1 SSH 远端路径默认不参与本地 repo path canonicalization
+
+典型场景：
+
+```text
+Windows 本地工作区：
+C:\Users\MSI-\project
+
+agent 在 Windows shell 里执行：
+ssh user@linux "cd /home/user/project && npm test"
+
+远端输出中出现：
+/home/user/project/src/auth.ts
+```
+
+这里的远端路径：
+
+```text
+/home/user/project/src/auth.ts
+```
+
+默认不能转成：
+
+```text
+${REPO}/src/auth.ts
+```
+
+原因：它不是当前本机 repo root：
+
+```text
+C:\Users\MSI-\project
+```
+
+下面的本地文件路径。
+
+路径转译只允许发生在“当前本地 repo root 严格包含的路径”上。
+
+### 37.2 为什么不能自动猜 SSH 远端路径等于本地 repo
+
+远端路径虽然目录名可能相同，但它可能是：
+
+```text
+1. 另一台机器上的另一个 clone。
+2. 不同 commit。
+3. 不同 branch。
+4. 不同 dirty worktree。
+5. 同名但完全无关的目录。
+6. Docker / CI / remote devcontainer 内部路径。
+7. 只存在于远端，不存在于本地的临时路径。
+```
+
+因此不要根据这些信息自动建立映射：
+
+```text
+basename 相同
+目录名同叫 project
+输出里有 src/auth.ts
+ssh command 里 cd /home/user/project
+```
+
+这些都不足以证明远端路径等价于当前本地 repo path。
+
+### 37.3 正确记录方式
+
+SSH 命令本身可以记录为 run：
+
+```json
+{
+  "type": "run_finished",
+  "tool": "bash",
+  "command": "ssh user@linux \"cd /home/user/project && npm test\"",
+  "output_summary": "remote npm test failed",
+  "status": "failed"
+}
+```
+
+但远端输出中的绝对路径应被视为：
+
+```text
+remote/external path evidence
+```
+
+默认处理可以是：
+
+```text
+[external-path-redacted]
+```
+
+或在受控展示层标注为：
+
+```text
+remote path: /home/user/project/src/auth.ts
+```
+
+但不要写成 Hutao canonical path：
+
+```text
+${REPO}/src/auth.ts
+```
+
+### 37.4 本地 edit 检测边界
+
+如果 agent 在 Windows 执行：
+
+```bash
+ssh user@linux "sed -i 's/foo/bar/' /home/user/project/src/auth.ts"
+```
+
+这修改的是远端文件。Windows 本地仓库如果没有产生 git diff，则 Hutao 本地应该记录：
+
+```text
+Run: ssh remote command executed
+Edit: none
+```
+
+只有当命令导致当前本地工作区实际变化，例如：
+
+```text
+scp / rsync 拉回文件
+git pull 改变本地工作区
+命令直接写入当前本地 repo root 下的文件
+```
+
+并且本地 run 前后 git diff 发生变化，才可以生成本地 edit。
+
+### 37.5 未来如果支持 trusted remote workspace，必须显式 opt-in
+
+如果以后要支持 SSH 远端 repo 与本地 repo 的映射，必须显式配置，不允许自动猜。
+
+示例：
+
+```json
+{
+  "remote_workspaces": [
+    {
+      "name": "dev-server",
+      "kind": "ssh",
+      "host": "linux-box",
+      "remote_repo_root": "/home/user/project",
+      "local_repo_root": "${REPO}",
+      "trusted": true
+    }
+  ]
+}
+```
+
+只有这种明确 trusted remote workspace 才能把：
+
+```text
+ssh://linux-box/home/user/project/src/auth.ts
+```
+
+映射为：
+
+```text
+src/auth.ts
+```
+
+并且该映射应保留 remote identity，不要伪装成普通本地路径事实。
+
+### 37.6 简单规则
+
+```text
+当前本机 repo root 下的路径：
+可以转成 ${REPO}/...
+
+SSH / Docker / CI / remote shell 输出里的绝对路径：
+默认 external/remote evidence，不自动转成 ${REPO}/...
+```
+
+正确：
+
+```text
+C:\Users\MSI-\project\src\a.ts
+  -> ${REPO}/src/a.ts
+```
+
+默认不要：
+
+```text
+/home/server/project/src/a.ts
+  -> ${REPO}/src/a.ts
+```
+
+除非未来存在显式 trusted remote workspace mapping。
+
+---
+
+## 38. 最新交接记录 / menu-first usage-level Hutao workflows landed
+
+本节记录本轮继续推进“使用级体验，所有操作逻辑可以用 menu 操作使用”的落地状态。
+
+### 38.1 已落地的菜单入口
+
+新增或增强：
+
+```text
+/hutao
+/action
+/action session
+/action prompting
+/action edit
+/action run
+/action git
+/action fork
+/action merge
+/session
+/prompting
+/edit
+/run
+/git
+/fork
+/merge session
+```
+
+当前行为：
+
+```text
+1. /hutao 是 Hutao 主菜单入口，等价于 /action。
+2. /action 无参数打开主菜单。
+3. 主菜单可进入 Sessions / Promptings / Edits / Runs / Git / Fork / Merge / Doctor / Language。
+4. /action session|prompting|edit|run 不带 id 时进入对应选择菜单。
+5. /run 无参数或只有 filter flag 时进入 run 选择菜单，选中后展示 run detail。
+6. /git 无参数进入 Git 操作菜单，可选择 status、graph、scan、stage-trace、commit detail。
+7. /fork 无参数进入菜单：source type -> item/ref -> mode。
+8. /merge session 无 source id 时进入 source session 选择，然后进入 merge wizard。
+```
+
+### 38.2 merge safety UX
+
+会改变历史或代码的 merge 操作现在在 command/menu 层都有确认保护：
+
+```text
+/merge session <id> --history
+/merge session <id> --apply-edits
+/merge session <id> --apply-tree
+/merge session <id> --wizard -> Import History / Apply Edits / Apply Final Snapshot
+wizard conflict flow -> Skip Last Conflict and Continue
+```
+
+执行前会先调用 preview，并在 confirm 中展示：
+
+```text
+source session
+mode
+changed files
+是否会修改 working tree
+```
+
+preview 模式仍然不改代码。
+
+### 38.3 测试覆盖
+
+新增集成测试覆盖：
+
+```text
+1. /action 主菜单进入 Runs 并查看 run detail。
+2. /action 主菜单进入 Git 并查看 graph。
+3. /merge session 无 id 时选择 source session 并进入 wizard preview。
+4. /merge session --history 无 id 时选择 source session、确认并执行 history-only merge。
+5. history-only merge 追加 hutao_merge native entry。
+```
+
+### 38.4 已验证命令
+
+本轮验证通过：
+
+```bash
+npm test --workspace hutao-agent -- test/hutao/integration.test.ts
+# 13/13 passed
+
+npm test --workspace hutao-agent -- test/hutao/core.test.ts
+# 26/26 passed
+
+npm run check
+# passed, only existing template-literal info in core.test.ts
+
+npm run build --workspace hutao-agent
+# passed
+```
+
+### 38.5 当前准确表述
+
+现在可以说：
+
+```text
+Hutao 的常用 trace/session/prompting/edit/run/git/fork/merge 操作已经有菜单式入口，/hutao 可作为主菜单进入，merge 会改历史或代码的操作有 preview + confirm 保护，并有集成测试覆盖主要 menu-first workflow。
+```
+
+仍然不要过度说：
+
+```text
+完整 TUI 自定义复杂 UI 已完成。
+所有 merge/revert 冲突都能自动解决。
+所有 Phase D/E/F 已完成。
+```

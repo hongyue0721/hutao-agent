@@ -154,7 +154,7 @@ describe("readClipboardImage", () => {
 		mocks.clipboard.getImageBinary.mockResolvedValue(new Uint8Array([7]));
 
 		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
-		const result = await readClipboardImage({ platform: "linux", env: {} });
+		const result = await readClipboardImage({ platform: "linux", env: {}, isWsl: false });
 		expect(result).not.toBeNull();
 		expect(result?.mimeType).toBe("image/png");
 		expect(Array.from(result?.bytes ?? [])).toEqual([7]);
@@ -168,7 +168,7 @@ describe("readClipboardImage", () => {
 		mocks.clipboard.hasImage.mockReturnValue(false);
 
 		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
-		const result = await readClipboardImage({ platform: "linux", env: {} });
+		const result = await readClipboardImage({ platform: "linux", env: {}, isWsl: false });
 		expect(result).toBeNull();
 	});
 });
