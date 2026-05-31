@@ -241,8 +241,55 @@ What is now working:
 Remaining follow-up work:
 
 ```text
-1. Add broader real-terminal/manual smoke coverage as Hutao's TUI test harness matures.
-2. Continue improving conflict-specific recovery UX for degraded native mappings and /edit --before restore/replay edge cases.
+1. Implement complete conversation history reproduction on main as an extensible architecture, not a minimal demo loop.
+2. Keep the full-history work iterative and upgrade-friendly: new capture, storage, rendering, redaction, and export layers should be separable.
+3. After each implementation slice, run targeted tests to prove the change does not break existing core Hutao behavior.
+4. Add broader real-terminal/manual smoke coverage as Hutao's TUI test harness matures.
+5. Continue improving conflict-specific recovery UX for degraded native mappings and /edit --before restore/replay edge cases.
+```
+
+Branch strategy after README/current-safe checkpoint:
+
+```text
+safe-trace branch:
+  Preserves the current safe trace design at commit b4f8250.
+  It keeps canonical .hutao data conservative: promptings, run summaries, edit patches, commit links, fork/merge/revert facts, sanitized raw summaries.
+
+main branch:
+  From this point forward, main prioritizes complete conversation history reproduction.
+  The goal is not a minimal closed-loop demo. The goal is an iterative, extensible upgrade path for full conversation capture, replay/rendering, future redaction, export, and privacy controls.
+  It may add full user/assistant/tool/native-session conversation capture so resume can reconstruct a near-complete dialogue timeline.
+  This full-history direction is intentionally higher fidelity than safe-trace and may persist sensitive content until later redaction/privacy iterations are implemented.
+
+Implementation discipline:
+  Each full-history slice must preserve existing prompting/run/edit/fork/merge/revert behavior unless explicitly changed.
+  After each completed slice, run focused tests for the touched area plus core Hutao regression tests before committing.
+  Prefer additive modules and compatibility fallbacks over rewrites that endanger the current trace system.
+
+Important:
+  Git branches are not privacy boundaries. Anything committed to main can remain in Git history even after later redaction.
+  Do not present main full-history work as shareable/sanitized by default until an explicit redaction/export workflow exists.
+```
+
+Full-history implementation requirements:
+
+```text
+Observed behavior:
+  /merge session --history currently imports Hutao trace facts only. It does not inject imported history into the model context.
+  Continuing from a historical prompting/edit can create or switch to a forkSession, but that is not the same as giving the AI complete prior conversation memory.
+
+Required main-branch direction:
+  Full conversation reproduction must include both a viewer and context hydration.
+  Viewer: /session <id> --conversation, or an equivalent resume view, must reconstruct a readable user/assistant/tool timeline.
+  Context hydration: resume/continue/fork-from-history must be able to feed the relevant conversation history back into the model context, with clear boundaries and future redaction controls.
+
+UX rule:
+  Until context hydration is implemented, history-only import and continuation UI must not imply that the AI already has memory.
+  Messages should explicitly say: history was imported into Hutao trace, but it was not injected into the model context.
+
+Implementation rule:
+  Do not patch this as a one-off prompt stuffing hack. Build additive, testable layers: capture -> store -> render/replay -> hydrate context -> redact/export.
+  After each layer, run targeted tests plus core Hutao regression tests to ensure existing trace/fork/merge/revert behavior still works.
 ```
 
 Last validation run for the checkpoint:

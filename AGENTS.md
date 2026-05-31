@@ -1824,8 +1824,55 @@ Explicit fork coordination and armed historical continuation are implemented in 
 后续跟进重点：
 
 ```text
-1. 随着 Hutao TUI test harness 成熟，继续补真实 terminal/manual smoke 覆盖。
-2. 继续增强 degraded native mapping 与 /edit --before restore/replay 边界场景的冲突恢复 UX。
+1. main 分支优先实现完整对话历史复现，但目标不是最小闭环 demo，而是可迭代、可拓展的升级架构。
+2. full-history 工作要保持分层：capture、storage、render/replay、redaction、export、privacy control 后续都应能独立演进。
+3. 每完成一个实现切片，必须跑相关 targeted tests，证明没有破坏现有 Hutao 主体功能。
+4. 随着 Hutao TUI test harness 成熟，继续补真实 terminal/manual smoke 覆盖。
+5. 继续增强 degraded native mapping 与 /edit --before restore/replay 边界场景的冲突恢复 UX。
+```
+
+当前分支策略：
+
+```text
+safe-trace 分支：
+  保留当前安全 trace 设计，锚定 commit b4f8250。
+  canonical .hutao 数据继续保持保守：prompting、run summary、edit patch、commit link、fork/merge/revert 事实、sanitized raw summary。
+
+main 分支：
+  从现在开始优先做完整对话历史复现。
+  目标不是做一个最小闭环，而是做成可迭代、可拓展的升级路线，后续可以继续叠加完整捕获、历史渲染/回放、脱敏导出、隐私控制等能力。
+  可以新增完整 user / assistant / tool / native-session conversation capture，让 resume 能重建尽可能完整的 dialogue timeline。
+  main 的 full-history 方向优先级高于 safe-trace 的隐私保守策略，后续再迭代脱敏、导出和隐私安全能力。
+
+实现纪律：
+  每个 full-history 切片默认不得破坏现有 prompting/run/edit/fork/merge/revert 行为，除非明确说明并获得确认。
+  每完成一个切片，必须运行相关测试和 Hutao 核心回归测试，确认对主体功能无影响后再提交。
+  优先新增可组合模块和兼容 fallback，避免为了完整对话复现重写并破坏现有 trace 系统。
+
+重要提醒：
+  Git 分支不是隐私边界。任何提交进 main 的完整对话内容，即使后续脱敏，也可能留在 Git history。
+  在明确实现 redaction/export 工作流前，不要把 main 的 full-history 结果宣传成默认可分享或已脱敏。
+```
+
+完整对话历史复现实现要求：
+
+```text
+已观察到的行为：
+  /merge session --history 当前只导入 Hutao trace facts，不会把导入的历史注入 model context。
+  从历史 prompting/edit 继续可以创建或切换 forkSession，但这不等于 AI 获得了完整上文记忆。
+
+main 分支必须补齐的方向：
+  完整对话复现必须同时包含 conversation viewer 和 context hydration。
+  viewer：/session <id> --conversation 或等价 resume view 必须能重建可读的 user / assistant / tool timeline。
+  context hydration：resume / continue / fork-from-history 必须能把相关 conversation history 喂回模型上下文，并为后续 redaction/privacy control 留出边界。
+
+UX 规则：
+  在 context hydration 完成前，history-only import 和 continuation UI 不能暗示 AI 已经拥有记忆。
+  提示文案必须明确：history 已导入 Hutao trace，但尚未注入 model context。
+
+实现规则：
+  不要把这件事做成一次性的 prompt stuffing hack。必须按可测试、可迭代层次实现：capture -> store -> render/replay -> hydrate context -> redact/export。
+  每完成一层，都要跑 targeted tests 和 Hutao 核心回归测试，确认现有 trace/fork/merge/revert 行为没有被破坏。
 ```
 
 该 checkpoint 已跑验证：
