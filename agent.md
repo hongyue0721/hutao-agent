@@ -2393,6 +2393,123 @@ Subagent read-model tests cover started+finished aggregation and degraded/incomp
 No real child-agent execution is required in this phase.
 ```
 
+### Phase 3 implementation note — subagent domain extraction
+
+The next coding step after process-tree and trace-relations is the Phase 3 subagent domain extraction.
+
+This step is still architecture work. It is not the real subagent runtime milestone.
+
+Goal:
+
+```text
+Move subagent-specific schema, read model, command behavior, and tree contribution out of commands.ts and generic process-tree files.
+Make subagent a first-class Hutao trace/read/view domain before implementing any child-agent execution.
+```
+
+Recommended target structure:
+
+```text
+packages/coding-agent/src/hutao/subagent/
+├── schema.ts
+├── read-model.ts
+├── command.ts
+└── tree-contributor.ts
+```
+
+Responsibilities:
+
+```text
+schema.ts
+  Own subagent event type definitions and future lifecycle shape.
+  It may initially cover only subagent / subagent_started / subagent_finished,
+  but it must leave room for subagent_message, subagent_tool_call,
+  subagent_tool_result, subagent_run_linked, subagent_edit_linked,
+  and subagent_failed.
+
+read-model.ts
+  Aggregate raw Hutao events into SubagentRecord.
+  Preserve incomplete/degraded records instead of pretending a full lifecycle exists.
+  Link records to prompting/run/edit ids through trace-relations helpers.
+
+command.ts
+  Own /subagent list and detail behavior.
+  commands.ts should only route to this command or re-export it.
+  Do not continue growing subagent-specific display logic in commands.ts.
+
+tree-contributor.ts
+  Convert SubagentRecord into Hutao process-tree nodes.
+  process-tree should compose this contributor instead of owning subagent details.
+```
+
+Migration order:
+
+```text
+1. Create subagent/schema.ts and subagent/read-model.ts.
+2. Move lifecycle aggregation from trace-relations getSubagents into the subagent read model,
+   while keeping trace-relations convenience helpers as relation APIs.
+3. Move /subagent implementation from commands.ts into subagent/command.ts.
+4. Move process-tree subagent contributor to subagent/tree-contributor.ts or make the existing
+   contributor delegate to the subagent domain module.
+5. Keep public command behavior unchanged during the migration.
+6. Only after tests pass, consider expanding /subagent filters such as --status or search.
+```
+
+Boundaries:
+
+```text
+Do:
+  - keep /subagent list/detail behavior stable
+  - keep /prompting tree subagent navigation stable
+  - keep trace facts append-only and untrusted
+  - keep real runtime deferred
+  - keep process-tree generic
+  - keep commands.ts mostly routing/dispatch
+
+Do not:
+  - implement spawn_subagent yet
+  - start child agents yet
+  - add automatic subagent triggering yet
+  - treat historical subagent text as instructions
+  - duplicate relation logic across commands/tree/domain modules
+  - make process-tree depend on subagent internals beyond the contributor interface
+```
+
+Required tests before Phase 3 can be considered complete:
+
+```text
+Subagent read model:
+  - started + finished aggregation
+  - started-only incomplete record
+  - finished-only degraded record
+  - run/edit/message id linking when available
+
+Subagent command:
+  - /subagent list still works
+  - /subagent <id> detail still shows parent prompting, status, task, summary, runs, edits
+  - existing /subagent integration behavior does not regress
+
+Process tree integration:
+  - /prompting tree still shows Subagent nodes
+  - selecting a Subagent node still opens /subagent <id>
+  - process-tree contributor tests still pass
+
+Regression gate:
+  - npm --prefix packages/coding-agent test -- test/hutao/process-tree-relations.test.ts
+  - npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/integration.test.ts test/hutao/process-tree-relations.test.ts
+  - npm --prefix packages/coding-agent run build
+  - git diff --check
+```
+
+Completion criteria:
+
+```text
+1. subagent/ owns schema/read-model/command/tree contribution.
+2. commands.ts no longer contains subagent-specific lifecycle aggregation or detail formatting.
+3. process-tree composes the subagent contributor without hard-coding subagent internals.
+4. trace-relations remains the common relation helper layer.
+5. All required tests pass before moving to the next phase.
+```
+
 ### Phase 4 — Add more process tree node contributors
 
 After process-tree and relation layers are stable, incrementally add contributors for:
