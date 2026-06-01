@@ -248,6 +248,18 @@ export function getRepoLocalSessionDir(cwd: string): string | undefined {
 	return repoRoot ? join(repoRoot, HUTAO_DIR_NAME, HUTAO_SESSIONS_DIR_NAME) : undefined;
 }
 
+/**
+ * Resolve the session directory that should back the "current folder" resume picker.
+ *
+ * Runtime sessions may still point at a legacy/global store when settings or older
+ * startup paths are involved, but Hutao repo-local native sessions must remain
+ * first-class for cloned repositories. Prefer `.hutao/sessions` whenever the cwd is
+ * inside a Git repository, then fall back to the active manager/session directory.
+ */
+export function getCurrentFolderResumeSessionDir(cwd: string, activeSessionDir?: string): string | undefined {
+	return getRepoLocalSessionDir(cwd) ?? activeSessionDir;
+}
+
 function isRepoLocalSessionsDir(sessionDir: string): boolean {
 	const normalized = normalizePath(sessionDir);
 	return basename(normalized) === HUTAO_SESSIONS_DIR_NAME && basename(dirname(normalized)) === HUTAO_DIR_NAME;
@@ -303,10 +315,20 @@ function pathIsInside(parent: string, child: string): boolean {
 	return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !/^[A-Za-z]:/.test(rel));
 }
 
+function getResumeSourceRank(source: SessionInfo["source"]): number {
+	if (source === "repo-local") return 0;
+	if (source === "raw-only") return 1;
+	return 2;
+}
+
 function uniqueSortedSessions(sessions: SessionInfo[]): SessionInfo[] {
 	const byPath = new Map<string, SessionInfo>();
 	for (const session of sessions) byPath.set(session.path, session);
-	return [...byPath.values()].sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	return [...byPath.values()].sort((a, b) => {
+		const sourceRank = getResumeSourceRank(a.source) - getResumeSourceRank(b.source);
+		if (sourceRank !== 0) return sourceRank;
+		return b.modified.getTime() - a.modified.getTime();
+	});
 }
 
 export interface ResumeSessionSourceCounts {

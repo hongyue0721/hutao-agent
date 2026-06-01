@@ -211,9 +211,21 @@ interface FlatSessionNode {
 	ancestorContinues: boolean[];
 }
 
+function getSessionSourceRank(session: SessionInfo): number {
+	if (session.source === "repo-local") return 0;
+	if (session.source === "raw-only") return 1;
+	return 2;
+}
+
+function compareSessionsForResumeDisplay(a: SessionInfo, b: SessionInfo): number {
+	const sourceRank = getSessionSourceRank(a) - getSessionSourceRank(b);
+	if (sourceRank !== 0) return sourceRank;
+	return b.modified.getTime() - a.modified.getTime();
+}
+
 /**
  * Build a tree structure from sessions based on parentSessionPath.
- * Returns root nodes sorted by modified date (descending).
+ * Returns root nodes sorted with resumable repo-local native sessions first.
  */
 function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
 	const byPath = new Map<string, SessionTreeNode>();
@@ -237,9 +249,9 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
 		}
 	}
 
-	// Sort children and roots by modified date (descending)
+	// Sort children and roots with resumable repo-local native sessions before degraded/raw/global entries.
 	const sortNodes = (nodes: SessionTreeNode[]): void => {
-		nodes.sort((a, b) => b.session.modified.getTime() - a.session.modified.getTime());
+		nodes.sort((a, b) => compareSessionsForResumeDisplay(a.session, b.session));
 		for (const node of nodes) {
 			sortNodes(node.children);
 		}

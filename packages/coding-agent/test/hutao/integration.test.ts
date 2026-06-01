@@ -80,6 +80,7 @@ const commandMessages: Array<{
 	options?: unknown;
 }> = [];
 const commandAppendedEntries: Array<{ customType: string; data?: unknown }> = [];
+const commandSwitches: Array<{ sessionPath: string; options?: { withSession?: (ctx: ExtensionCommandContext) => Promise<void> } }> = [];
 
 function makeCommandContext(repo: string): ExtensionCommandContext {
 	return {
@@ -97,6 +98,7 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 					"View Patch": ["View patch", "查看补丁"],
 					"Preview context hydration": ["Preview context hydration", "预览上下文注入"],
 					"Queue hydration for next turn": ["Queue hydration for next turn", "排队注入到下一轮"],
+					"Resume this session": ["Resume this session", "继续此会话"],
 					Sessions: ["Sessions", "会话"],
 					Promptings: ["Promptings", "提示"],
 					Edits: ["Edits", "修改"],
@@ -124,6 +126,11 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 		appendEntry: vi.fn((customType, data) => {
 			commandAppendedEntries.push({ customType, data });
 		}),
+		switchSession: vi.fn(async (sessionPath, options) => {
+			commandSwitches.push({ sessionPath, options });
+			await options?.withSession?.(makeCommandContext(repo));
+			return { cancelled: false };
+		}),
 	} as unknown as ExtensionCommandContext;
 }
 
@@ -134,6 +141,7 @@ afterEach(() => {
 	commandSelections.length = 0;
 	commandMessages.length = 0;
 	commandAppendedEntries.length = 0;
+	commandSwitches.length = 0;
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -158,6 +166,46 @@ describe("Hutao integration safety", () => {
 		expect(contents).not.toContain("sk-");
 		expect(contents).toContain("[secret-redacted]");
 	});
+	it("resumes Hutao sessions by switching to the repo-local native session file", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir);
+		const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+			sessionId: nativeSession.getSessionId(),
+			sessionFile: nativeSession.getSessionFile(),
+			leafEntryId: nativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		nativeSession.appendMessage({ role: "user", content: "remember this", timestamp: Date.now() });
+		nativeSession.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "remembered" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "endTurn",
+			timestamp: Date.now(),
+		} as any);
+
+		commandSelections.push(nativeSession.getSessionId().slice(0, 20), "Resume this session");
+		await sessionCommand("", makeCommandContext(repo));
+
+		expect(commandSwitches).toHaveLength(1);
+		expect(commandSwitches[0].sessionPath).toBe(nativeSession.getSessionFile());
+		expect(new SessionRegistry(repo).readCurrentSessionId()).toBe(nativeSession.getSessionId());
+		expect(commandNotifications.at(-1)).toContain("Resumed native Hutao session");
+		expect(commandNotifications.at(-1)).toContain("Previous user/assistant/tool entries are now loaded as chat context");
+	});
+
 	it("previews and queues conversation hydration as next-turn custom context", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);

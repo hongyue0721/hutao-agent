@@ -37,7 +37,7 @@ import {
 	MissingSessionCwdError,
 	type SessionCwdIssue,
 } from "./core/session-cwd.ts";
-import { assertValidSessionId, getRepoLocalSessionDir, SessionManager } from "./core/session-manager.ts";
+import { assertValidSessionId, getCurrentFolderResumeSessionDir, getRepoLocalSessionDir, SessionManager } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -307,15 +307,16 @@ async function createSessionManager(
 	if (parsed.resume) {
 		initTheme(settingsManager.getTheme(), true);
 		try {
+			const currentFolderSessionDir = getCurrentFolderResumeSessionDir(cwd, sessionDir);
 			const selectedPath = await selectSession(
-				(onProgress) => SessionManager.listForResume(cwd, sessionDir, onProgress),
-				(onProgress) => SessionManager.listAll(sessionDir, onProgress),
+				(onProgress) => SessionManager.listForResume(cwd, currentFolderSessionDir, onProgress),
+				(onProgress) => SessionManager.listAll(currentFolderSessionDir, onProgress),
 			);
 			if (!selectedPath) {
 				console.log(chalk.dim("No session selected"));
 				process.exit(0);
 			}
-			return SessionManager.open(selectedPath, sessionDir);
+			return SessionManager.open(selectedPath, currentFolderSessionDir);
 		} finally {
 			stopThemeWatcher();
 		}

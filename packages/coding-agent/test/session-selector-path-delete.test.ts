@@ -289,6 +289,41 @@ describe("session selector path/delete interactions", () => {
 		expect(errorMessage).toContain("cannot be resumed as native chat");
 	});
 
+	it("keeps repo-local native sessions first in threaded current-folder display", async () => {
+		const sessions = [
+			makeSession({
+				id: "raw-newer",
+				source: "raw-only",
+				name: "New raw trace",
+				modified: new Date("2026-01-02T00:00:00.000Z"),
+			}),
+			makeSession({
+				id: "repo-older",
+				source: "repo-local",
+				name: "Old native chat",
+				modified: new Date("2026-01-01T00:00:00.000Z"),
+			}),
+		];
+
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			{ keybindings },
+		);
+		await flushPromises();
+
+		const output = stripAnsi(selector.render(160).join("\n"));
+		const repoIndex = output.indexOf("[repo-local] Old native chat");
+		const rawIndex = output.indexOf("[raw-only] New raw trace");
+		expect(repoIndex).toBeGreaterThanOrEqual(0);
+		expect(rawIndex).toBeGreaterThanOrEqual(0);
+		expect(repoIndex).toBeLessThan(rawIndex);
+	});
+
 	it("threads sessions when parent and child paths use different symlink aliases", async () => {
 		const paths = createSymlinkedSessionPaths();
 		tempDirs.push(paths.baseDir);

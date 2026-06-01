@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	countResumeSessionSources,
 	findMostRecentSession,
+	getCurrentFolderResumeSessionDir,
 	getRepoLocalSessionDir,
 	loadEntriesFromFile,
 	SessionManager,
@@ -286,6 +287,28 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		});
 	}
 
+	it("prefers repo-local sessions for the current-folder resume picker even when the active session dir is global", async () => {
+		const repoLocalSessionDir = getRepoLocalSessionDir(repo)!;
+		const activeGlobalSessionDir = join(tempDir, "global-sessions");
+		mkdirSync(activeGlobalSessionDir, { recursive: true });
+
+		expect(getCurrentFolderResumeSessionDir(repo, activeGlobalSessionDir)).toBe(repoLocalSessionDir);
+
+		const session = SessionManager.create(repo, repoLocalSessionDir);
+		appendRound(session, "repo-local should be resumable");
+
+		const activeOnly = await SessionManager.listForResume(repo, activeGlobalSessionDir);
+		const currentFolder = await SessionManager.listForResume(
+			repo,
+			getCurrentFolderResumeSessionDir(repo, activeGlobalSessionDir),
+		);
+
+		expect(activeOnly).toEqual([]);
+		expect(currentFolder).toHaveLength(1);
+		expect(currentFolder[0]?.source).toBe("repo-local");
+		expect(currentFolder[0]?.firstMessage).toBe("repo-local should be resumable");
+	});
+
 	it("stores native sessions under .hutao/sessions/<id>/native-session.jsonl without absolute cwd", async () => {
 		const sessionDir = getRepoLocalSessionDir(repo);
 		expect(sessionDir).toBe(join(repo, ".hutao", "sessions"));
@@ -529,6 +552,33 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(listed.find((entry) => entry.path === repoLocal.getSessionFile())?.source).toBe("repo-local");
 		expect(listed.find((entry) => entry.path === legacy.getSessionFile())?.source).toBe("global");
 		expect(SessionManager.create(repo, sessionDir).getSessionFile()).toContain(`${join(".hutao", "sessions")}`);
+	});
+
+	it("orders repo-local native sessions before newer raw-only and legacy global resume entries", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const repoLocal = SessionManager.create(repo, sessionDir);
+		appendRound(repoLocal, "repo local");
+
+		const rawDir = join(sessionDir, "sess_raw_newer");
+		mkdirSync(rawDir, { recursive: true });
+		writeFileSync(
+			join(rawDir, "session.json"),
+			`${JSON.stringify({
+				id: "sess_raw_newer",
+				kind: "session",
+				title: "Newer raw-only trace",
+				created_at: "2026-01-01T00:00:00.000Z",
+				updated_at: "2026-01-03T00:00:00.000Z",
+			})}\n`,
+		);
+		writeFileSync(join(rawDir, "events.jsonl"), `${JSON.stringify({ type: "prompting", text: "raw" })}\n`);
+
+		const legacy = SessionManager.create(repo);
+		appendRound(legacy, "legacy");
+
+		const listed = await SessionManager.listForResume(repo, sessionDir);
+		expect(listed.map((entry) => entry.source)).toEqual(["repo-local", "raw-only", "global"]);
+		expect(listed[0].path).toBe(repoLocal.getSessionFile());
 	});
 
 	it("includes raw-only Hutao trace sessions in resume lists without treating them as native sessions", async () => {

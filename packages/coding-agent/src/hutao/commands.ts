@@ -214,27 +214,63 @@ function sessionSummary(session: { id: string; kind: string; status: string }, e
 	return `${shortId(session.id)} ${session.kind} ${session.status} promptings=${events.filter((event) => event.session_id === session.id && event.type === "prompting").length} runs=${events.filter((event) => event.session_id === session.id && event.type === "run_finished").length} edits=${events.filter((event) => event.session_id === session.id && event.type === "edit").length} merges=${events.filter((event) => event.session_id === session.id && event.type === "merge").length}`;
 }
 
+function getNativeSessionPath(repoRoot: string, sessionId: string): string {
+	return join(repoRoot, ".hutao", "sessions", sessionId, "native-session.jsonl");
+}
+
+async function switchToNativeHutaoSession(
+	ctx: ExtensionCommandContext,
+	repoRoot: string,
+	registry: SessionRegistry,
+	sessionId: string,
+): Promise<"switched" | "already" | "missing" | "cancelled"> {
+	const nativeSessionPath = getNativeSessionPath(repoRoot, sessionId);
+	if (!existsSync(nativeSessionPath)) return "missing";
+	registry.setCurrentSession(sessionId);
+	const result = await ctx.switchSession(nativeSessionPath, {
+		withSession: async (freshCtx) => {
+			new SessionRegistry(repoRoot).setCurrentSession(sessionId);
+			notify(freshCtx, "Hutao resume", [
+				`Resumed native Hutao session ${sessionId}.`,
+				`native session: ${nativeSessionPath}`,
+				"Previous user/assistant/tool entries are now loaded as chat context.",
+			]);
+		},
+	});
+	return result.cancelled ? "cancelled" : "switched";
+}
+
 async function resumeSession(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
 	const registry = new SessionRegistry(repoRoot);
+	const session = registry.readSession(sessionId);
+	if (!session) return notify(ctx, "Hutao resume", [`Session not found: ${sessionId}`], "warning");
+	const nativeStatus = await switchToNativeHutaoSession(ctx, repoRoot, registry, session.id);
+	if (nativeStatus === "switched") return;
+	if (nativeStatus === "already") {
+		return notify(ctx, "Hutao resume", [
+			`Current native Hutao session is already ${session.id}.`,
+			"Previous user/assistant/tool entries are already loaded as chat context.",
+		]);
+	}
+	if (nativeStatus === "cancelled") return notify(ctx, "Hutao resume", ["Native resume cancelled."], "warning");
+
 	const current = registry.readCurrentSessionId();
 	if (current === sessionId) {
 		notify(ctx, "Hutao resume", [
-			`Current Hutao session is already ${sessionId}.`,
-			"Continue chatting normally; new promptings will be recorded here.",
-		]);
+			`Current Hutao trace session is already ${sessionId}, but native-session.jsonl is missing.`,
+			"Only trace history is available; native chat context cannot be resumed.",
+		], "warning");
 		return;
 	}
-	const session = registry.readSession(sessionId);
-	if (!session) return notify(ctx, "Hutao resume", [`Session not found: ${sessionId}`], "warning");
 	const continuation = await registry.createContinuationSession(session.id);
 	if (!continuation)
 		return notify(ctx, "Hutao resume", [`Failed to create continuation for ${session.id}`], "warning");
 	rebuildIndex(repoRoot);
 	notify(ctx, "Hutao resume", [
-		`Created continuation forkSession ${continuation.id}`,
+		`native-session.jsonl is missing for ${session.id}; created degraded continuation forkSession ${continuation.id}`,
 		`parent session: ${session.id}`,
-		"Continue chatting normally; new promptings/runs/edits will be recorded in the continuation session.",
-	]);
+		"Continue chatting normally; trace promptings/runs/edits will be recorded in the continuation session.",
+	], "warning");
 }
 
 async function runSessionConversationAction(

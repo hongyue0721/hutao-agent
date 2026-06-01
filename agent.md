@@ -1487,3 +1487,380 @@ Acceptance criteria for this bug:
 ```
 
 Do not claim repo-local native resume is complete until ciallo-style repos with a tracked `native-session.jsonl` appear in the native resume picker.
+
+## Compaction handoff update — Windows resume works, Linux/server interactive TUI still hides repo-local sessions
+
+A later cross-platform check narrowed the repo-local resume issue further.
+
+Observed user verification:
+
+```text
+Windows:
+- D:\OneDrive\Desktop\ciallo
+- D:\OneDrive\Desktop\checking\ciallo
+Both clones show repo-local resume correctly.
+
+Server 152.42.205.229:
+- /root/hello/ciallo
+- /root/aws/ciallo
+Both fresh clones contain the repo-local Hutao native session, but interactive `/resume` shows:
+  No sessions in current folder. Press Tab to view all.
+```
+
+Server-side verification already performed:
+
+```bash
+ssh root@152.42.205.229 'cd /root/aws/ciallo && find .hutao/sessions -maxdepth 2 -type f -name native-session.jsonl -print && git ls-files .hutao | grep native-session'
+```
+
+Verified facts for `/root/aws/ciallo`:
+
+```text
+- .hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl exists.
+- The native-session.jsonl file is tracked by Git.
+- /usr/bin/hutao points to /usr/lib/node_modules/hutao-agent/dist/cli.js.
+- hutao --version reports 0.77.0.
+- No HUTAO_CODING_AGENT_SESSION_DIR override is present.
+- getRepoLocalSessionDir('/root/aws/ciallo') returns /root/aws/ciallo/.hutao/sessions.
+- SessionManager.listForResume('/root/aws/ciallo', repoLocalDir) returns 1 repo-local session.
+- SessionSelectorComponent, when invoked directly with the real server data, renders:
+  [repo-local] hello,你看看AGENT.md,然后向我汇报你要干什么哦
+```
+
+A real bug was fixed during this investigation:
+
+```text
+Commit: 98a6711 fix(session): keep resume list when progress render fails
+
+Problem:
+- SessionManager.listForResume(..., onProgress) could return [] if the progress/render callback threw.
+- This was reproduced on the server:
+  no progress -> 1
+  ok progress -> 1
+  throwing progress -> 0
+
+Fix:
+- buildSessionInfosWithConcurrency now treats progress/render callbacks as observational and non-fatal.
+- Added regression test: keeps repo-local resume sessions when progress callbacks fail.
+
+Validation:
+- npm test --workspace hutao-agent -- test/session-manager/file-operations.test.ts passed.
+- npm test --workspace hutao-agent -- test/hutao/core.test.ts passed.
+- npm run build --workspace hutao-agent passed.
+- The fixed package was installed globally on 152.42.205.229.
+- After the fix, throwing progress callbacks still return 1 session.
+```
+
+However, this fix is necessary but not sufficient:
+
+```text
+After reinstalling the fixed package on the server, the user freshly cloned to /root/aws/ciallo and interactive `/resume` still showed:
+No sessions in current folder.
+
+Therefore the remaining bug is NOT:
+- missing native-session.jsonl
+- untracked native-session.jsonl
+- old server package
+- environment sessionDir override
+- SessionManager.listForResume inability to read repo-local sessions
+- SessionSelectorComponent inability to render repo-local sessions in isolation
+
+The remaining bug is likely in the Linux/server interactive TUI bridge:
+InteractiveMode.showSessionSelector()
+  -> currentSessionsLoader
+  -> SessionSelectorComponent async loading / overlay lifecycle / render state
+```
+
+Current best diagnosis:
+
+```text
+Windows interactive TUI can show repo-local resume for the same GitHub data.
+Server/Linux direct Node calls can list and render the repo-local session.
+Server/Linux real interactive `/resume` cannot show it.
+
+This points to a Linux/server interactive runtime or TTY/overlay lifecycle mismatch, not a data-layer problem.
+```
+
+Recommended next step — add diagnostics before guessing another fix:
+
+```text
+Do not blindly patch more resume behavior yet.
+Add a durable diagnostic path, ideally one of:
+
+1. `/resume --debug`
+2. `/doctor resume`
+3. Empty-state diagnostics inside Resume Session (Current Folder)
+
+The diagnostic must report, from the real interactive TUI call site:
+- cwd from this.sessionManager.getCwd()
+- sessionDir from this.sessionManager.getSessionDir()
+- currentSessionFile from this.sessionManager.getSessionFile()
+- this.sessionManager.usesDefaultSessionDir()
+- repo-local sessionDir from getRepoLocalSessionDir(cwd)
+- number of native-session.jsonl files found under .hutao/sessions
+- result count from SessionManager.listForResume(cwd, sessionDir)
+- result count from SessionManager.listForResume(cwd, getRepoLocalSessionDir(cwd))
+- result count passed into SessionSelectorComponent.setSessions for current scope
+- any loader error before it is converted into an empty list
+```
+
+Why diagnostics are necessary:
+
+```text
+The current evidence says the low-level APIs return 1 while the real TUI shows 0.
+A diagnostic from inside the real `/resume` call path will reveal whether:
+
+A. InteractiveMode is passing the wrong cwd/sessionDir.
+B. listForResume returns 1 but SessionSelectorComponent state becomes empty.
+C. async loadScope result is ignored or overwritten.
+D. overlay/requestRender lifecycle differs on Linux TTY.
+E. some current-session exclusion/filter logic is unexpectedly removing the only item.
+```
+
+Planned durable fix shape after diagnostics:
+
+```text
+- Keep session discovery independent of UI rendering failures.
+- Make repo-local native sessions first-class in the actual interactive resume picker.
+- If current scope is empty but repo-local native files exist, show actionable diagnostics instead of a silent empty list.
+- Add tests around the exact bridge layer, not just SessionManager:
+  1. Interactive resume loader receives repo-local sessionDir.
+  2. SessionSelectorComponent current scope receives repo-local sessions.
+  3. Empty current-folder render includes diagnostics when native files exist but no sessions are shown.
+  4. Linux-like cwd='.' repo-local session headers do not get filtered out.
+```
+
+Do not claim the clone-after-push native resume experience is complete until the server/Linux interactive `/resume` path shows the repo-local session in a fresh clone such as `/root/aws/ciallo`.
+
+## Compaction handoff update — upstream ciallo has native-session; pause code changes and diagnose resume paths
+
+User asked to stop rushing fixes and repeatedly clone/test to pin down the exact failing layer before further changes.
+
+Current verified facts:
+
+```text
+GitHub upstream https://github.com/hongyue0721/ciallo.git is NOT missing native state.
+origin/master contains:
+  .hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl
+
+The first lines of that upstream native-session.jsonl are valid native conversation entries:
+  session header id=sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2 cwd="."
+  model_change
+  thinking_level_change
+  user message: hello,你看看AGENT.md,然后向我汇报你要干什么哦
+  assistant toolCall read AGENT.md
+  toolResult read AGENT.md
+```
+
+Server clean reinstall was performed:
+
+```text
+Server: 152.42.205.229
+Global install removed:
+  npm uninstall -g hutao-agent
+  rm -rf /usr/lib/node_modules/hutao-agent /usr/local/lib/node_modules/hutao-agent
+  rm -f /usr/bin/hutao /usr/local/bin/hutao
+
+Reinstalled from local packed tarball.
+Current installed binary:
+  /usr/bin/hutao -> /usr/lib/node_modules/hutao-agent/dist/cli.js
+  hutao --version => 0.77.0
+
+Installed dist contains markers:
+  getCurrentFolderResumeSessionDir
+  Progress/render callbacks are observational
+  ctx.switchSession(nativeSessionPath)
+  Resumed native Hutao session
+```
+
+Important server observation from `/root/check/ciallo` after user testing:
+
+```text
+SessionManager.listForResume(cwd, repoLocalDir) returned two sessions:
+
+1. global session, newer:
+   /root/.pi/agent/sessions/--root-check-ciallo--/2026-06-01T04-03-36-634Z_019e8159-f43a-7b9f-bc0a-e8796a519023.jsonl
+   source: global
+   firstMessage: 我的前两句说了什么，你现在是需要干什么
+   messageCount: 2
+
+2. repo-local session, older:
+   /root/check/ciallo/.hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl
+   source: repo-local
+   firstMessage: hello,你看看AGENT.md,然后向我汇报你要干什么哦
+   messageCount: 88
+```
+
+This means the repo-local native session exists and can be read, but a newly-created global session can appear and sort ahead of it. Do not assume the repository data is missing.
+
+Current suspicious layers:
+
+```text
+A. Startup/resume picker path may differ from manual interactive /resume path.
+B. The startup flow may still create/use a global SessionManager before repo-local resume is selected.
+C. listForResume currently merges repo-local + raw-only + legacy global sessions, then sorts only by mtime, so a new global empty session can outrank the intended repo-local history.
+D. /session -> Resume previously showed old text:
+     Current Hutao session is already sess_...
+     Continue chatting normally; new promptings will be recorded here.
+   That text is no longer in installed /usr/lib/node_modules/hutao-agent/dist/hutao/commands.js, but it exists in /root/hutao-agent/node_modules/hutao-agent/src/hutao/commands.ts. Need to determine whether a stale local extension/package/runtime is loaded, or whether the user interaction happened before reinstall / in an older process.
+E. Even after /session -> continue, promptings and /git show trace records, but the model still does not know prior native chat. Trace recording works; native runtime context restoration is still not proven end-to-end.
+```
+
+Do not rush another code change yet. The next step should be repeated controlled clone diagnostics.
+
+Recommended diagnostic plan only, no fixes first:
+
+```bash
+# 1. Verify shell command resolution on server
+type -a hutao
+alias hutao || true
+command -V hutao
+which hutao
+readlink -f "$(which hutao)"
+hutao --version
+env | grep -E 'HUTAO|PI|SESSION' || true
+
+# 2. Verify no stale runtime is active
+ps -eo pid,lstart,cmd | grep -E 'node .*hutao|hutao-agent|dist/cli' | grep -v grep || true
+
+# 3. Repeated fresh clones, before running hutao
+rm -rf /root/repro-hutao-1 /root/repro-hutao-2 /root/repro-hutao-3
+mkdir -p /root/repro-hutao-1 /root/repro-hutao-2 /root/repro-hutao-3
+cd /root/repro-hutao-1 && git clone https://github.com/hongyue0721/ciallo.git
+cd /root/repro-hutao-1/ciallo
+
+git rev-parse HEAD
+git ls-files .hutao | grep native-session || true
+find .hutao/sessions -maxdepth 2 -type f -print | sort
+
+# 4. Before launching hutao, run installed-package direct listing
+node --input-type=module <<'NODE'
+import { getRepoLocalSessionDir, getCurrentFolderResumeSessionDir, SessionManager } from "/usr/lib/node_modules/hutao-agent/dist/core/session-manager.js";
+const cwd = process.cwd();
+const repoLocal = getRepoLocalSessionDir(cwd);
+const chosen = getCurrentFolderResumeSessionDir(cwd, "/tmp/empty-active-global");
+const direct = repoLocal ? await SessionManager.listForResume(cwd, repoLocal) : [];
+const chosenList = await SessionManager.listForResume(cwd, chosen);
+console.log(JSON.stringify({ cwd, repoLocal, chosen, directCount: direct.length, chosenCount: chosenList.length, direct: direct.map(s => ({ id: s.id, source: s.source, path: s.path, cwd: s.cwd, messageCount: s.messageCount, firstMessage: s.firstMessage })) }, null, 2));
+NODE
+
+# 5. Then test separately in fresh clones:
+#    a) hutao
+#    b) hutao --resume
+#    c) inside hutao, manual /resume
+#    d) inside hutao, /session -> select session -> continue/resume
+
+# 6. After each launch/action, inspect whether global sessions were created
+find /root/.pi/agent/sessions -path '*ciallo*' -type f -name '*.jsonl' -printf '%TY-%Tm-%Td %TH:%TM %p\n' | sort
+cat .hutao/refs/current-session
+stat .hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl
+```
+
+Expected interpretation:
+
+```text
+If before launching hutao, direct listing returns only repo-local 1, but startup picker shows empty:
+  Bug is in startup picker/UI loader path.
+
+If launching hutao immediately creates a global session under ~/.pi/agent/sessions/--root-...-ciallo--:
+  Bug is in startup createSessionManager/sessionDir selection or fallback behavior.
+
+If manual /resume shows repo-local while startup picker does not:
+  Startup picker and interactive /resume use different loader/path logic.
+
+If /session -> continue/resume still displays old "Current Hutao session is already" text after clean reinstall:
+  A stale local extension/package/runtime is being loaded from somewhere such as /root/hutao-agent/node_modules or an old process; trace exact module path.
+
+If /session -> continue/resume displays new "Resumed native Hutao session" text but model still cannot recall old chat:
+  switchSession is called but native SessionManager.buildSessionContext/provider context is not being applied as expected.
+
+If listForResume returns both global and repo-local and global is first:
+  Consider changing uniqueSortedSessions/listForResume ordering so repo-local and raw-only are prioritized over legacy globals, with legacy globals only as compatibility fallback.
+```
+
+Potential future fixes after diagnostics, but do not apply until location is confirmed:
+
+```text
+1. Make repo-local sessions sort before legacy global sessions in listForResume.
+2. Ensure startup picker uses getCurrentFolderResumeSessionDir just like manual /resume.
+3. Ensure fresh clone startup does not create a new global session when repo-local .hutao/sessions exists.
+4. Ensure /session -> resume always switches to .hutao/sessions/<id>/native-session.jsonl when present, even if .hutao/refs/current-session already points to the same trace id.
+5. Investigate why slash command promptings like /resume --debug were recorded/redacted as [external-path-redacted] --debug; likely sanitizer treats leading /command as POSIX absolute path.
+```
+
+Current working tree also contains uncommitted code changes from attempted fixes. Before continuing, inspect `git status -sb` and decide whether to keep, adjust, or revert after the repeated-clone diagnosis.
+
+## Final diagnosis and fix update — repo-local native resume picker ordering verified
+
+Repeated fresh-clone diagnostics against upstream `https://github.com/hongyue0721/ciallo.git` showed the repository data is valid:
+
+```text
+origin/master contains .hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl
+Direct SessionManager.open(native-session.jsonl).buildSessionContext() returns 88 messages.
+The first user message is:
+  hello,你看看AGENT.md,然后向我汇报你要干什么哦
+```
+
+Important runtime findings:
+
+```text
+1. A still-running old server TUI process existed at PID 33635 in /root/check/ciallo, explaining some stale UI/text observations.
+2. Fresh clone before launch listed exactly one repo-local native session.
+3. Plain `hutao` opens a new conversation by design; it does not auto-resume old native chat. It should show a startup notice telling users to use /resume or /session.
+4. `hutao --resume` did load current-folder repo-local sessions, but UI initially showed a transient empty state while loading.
+5. After plain `hutao`, a new raw-only Hutao trace session could be created and, before the final fix, could appear before the real repo-local native session in the threaded picker.
+6. Data-layer ordering and UI threaded ordering were separate. Fixing only SessionManager.listForResume was insufficient because SessionSelectorComponent.buildSessionTree re-sorted by modified time.
+```
+
+Fixes applied:
+
+```text
+1. SessionManager.listForResume now orders sources as:
+   repo-local native > raw-only Hutao history > legacy global
+   with modified-time sorting only within the same source class.
+
+2. CLI `hutao --resume` now resolves the current-folder resume directory through getCurrentFolderResumeSessionDir(cwd, activeSessionDir), so repo-local .hutao/sessions is preferred inside Git repos even if an active/global sessionDir exists.
+
+3. SessionSelectorComponent threaded display now uses the same source priority:
+   repo-local native > raw-only > global
+   so a newer raw-only trace cannot be selected above a real native conversation.
+
+4. Tests were added for:
+   - current-folder resume preferring repo-local session dir over active global session dir
+   - listForResume source ordering
+   - threaded selector source ordering
+   - repo-local native session switching from Hutao /session resume path
+```
+
+Server verification after reinstalling the repacked global `hutao-agent`:
+
+```text
+Fresh clone path:
+  /root/repro-hutao-fixed2/ciallo
+
+Data list after plain hutao:
+  [repo-local] sess_019e7ecf... messageCount=88 firstMessage=hello,你看看AGENT.md...
+
+hutao --resume visible picker after loading:
+  › [repo-local] hello,你看看AGENT.md,然后向我汇报你要干什么哦  88 12h
+
+No global ~/.pi/agent/sessions entry was created for the fresh clone during the verified run.
+```
+
+Local verification commands passed:
+
+```bash
+npm test --workspace hutao-agent -- test/session-selector-path-delete.test.ts
+npm test --workspace hutao-agent -- test/session-manager/file-operations.test.ts
+npm test --workspace hutao-agent -- test/hutao/integration.test.ts
+npm test --workspace hutao-agent -- test/hutao/core.test.ts
+npm run build --workspace hutao-agent
+```
+
+Remaining behavioral note:
+
+```text
+Plain `hutao` still starts a new conversation and only advertises existing repo-local sessions.
+To resume old native chat from a clone, use `hutao --resume` or interactive `/resume`, then select the [repo-local] native session.
+If product wants `hutao` to show the resume picker automatically whenever repo-local native sessions exist, that is a separate UX change and should be discussed explicitly.
+```

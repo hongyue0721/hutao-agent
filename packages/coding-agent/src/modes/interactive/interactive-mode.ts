@@ -77,7 +77,13 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import { countResumeSessionSources, type SessionContext, SessionManager } from "../../core/session-manager.ts";
+import {
+	countResumeSessionSources,
+	getCurrentFolderResumeSessionDir,
+	getRepoLocalSessionDir,
+	type SessionContext,
+	SessionManager,
+} from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -2593,8 +2599,8 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/resume") {
-				this.showSessionSelector();
+			if (text === "/resume" || text === "/resume --debug") {
+				this.showSessionSelector(text === "/resume --debug");
 				this.editor.setText("");
 				return;
 			}
@@ -4410,19 +4416,58 @@ export class InteractiveMode {
 		});
 	}
 
-	private showSessionSelector(): void {
+	private showSessionSelector(debug = false): void {
 		this.showSelector((done) => {
+			const cwd = this.sessionManager.getCwd();
+			const activeSessionDir = this.sessionManager.getSessionDir();
+			const repoLocalSessionDir = getRepoLocalSessionDir(cwd);
+			const currentFolderSessionDir = getCurrentFolderResumeSessionDir(cwd, activeSessionDir);
+			const debugLines = async (loadedCount?: number): Promise<string[]> => {
+				const activeCount = (await SessionManager.listForResume(cwd, activeSessionDir)).length;
+				const repoLocalCount = repoLocalSessionDir
+					? (await SessionManager.listForResume(cwd, repoLocalSessionDir)).length
+					: 0;
+				const currentFolderCount = currentFolderSessionDir
+					? (await SessionManager.listForResume(cwd, currentFolderSessionDir)).length
+					: 0;
+				return [
+					`cwd: ${cwd}`,
+					`active sessionDir: ${activeSessionDir}`,
+					`repo-local sessionDir: ${repoLocalSessionDir ?? "(none)"}`,
+					`current-folder resume sessionDir: ${currentFolderSessionDir ?? "(none)"}`,
+					`current session file: ${this.sessionManager.getSessionFile() ?? "(none)"}`,
+					`uses default sessionDir: ${this.sessionManager.usesDefaultSessionDir()}`,
+					`active listForResume count: ${activeCount}`,
+					`repo-local listForResume count: ${repoLocalCount}`,
+					`current-folder listForResume count: ${currentFolderCount}`,
+					...(loadedCount === undefined ? [] : [`selector loaded current count: ${loadedCount}`]),
+				];
+			};
+
+			if (debug) {
+				void debugLines()
+					.then((lines) => this.showStatus(`Resume debug\n${lines.join("\n")}`))
+					.catch((error: unknown) =>
+						this.showWarning(`Resume debug failed: ${error instanceof Error ? error.message : String(error)}`),
+					);
+			}
+
 			const selector = new SessionSelectorComponent(
+				async (onProgress) => {
+					const sessions = await SessionManager.listForResume(cwd, currentFolderSessionDir, onProgress);
+					if (debug) {
+						void debugLines(sessions.length)
+							.then((lines) => this.showStatus(`Resume debug\n${lines.join("\n")}`))
+							.catch((error: unknown) =>
+								this.showWarning(`Resume debug failed: ${error instanceof Error ? error.message : String(error)}`),
+							);
+					}
+					return sessions;
+				},
 				(onProgress) =>
-					SessionManager.listForResume(
-						this.sessionManager.getCwd(),
-						this.sessionManager.getSessionDir(),
-						onProgress,
-					),
-				(onProgress) =>
-					this.sessionManager.usesDefaultSessionDir()
-						? SessionManager.listAll(onProgress)
-						: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
+					currentFolderSessionDir
+						? SessionManager.listAll(currentFolderSessionDir, onProgress)
+						: SessionManager.listAll(onProgress),
 				async (sessionPath) => {
 					done();
 					await this.handleResumeSession(sessionPath);
