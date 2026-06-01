@@ -4574,3 +4574,96 @@ Acceptance criteria for the fix:
 ```
 
 Do not claim clone-after-push chat resume is fully working until this exact scenario is fixed and verified.
+
+---
+
+## 39. README 对外展示规则与最新 checkpoint / 2026-05-31
+
+本节为最新文档交接状态。后续修改 README / GitHub 首页时必须遵守本节。
+
+### 39.1 README 定位
+
+README 是项目门面和开发者入口，不是失败记录、未完成清单或压缩交接日志。
+
+README 必须详细说明：
+
+```text
+1. 项目目的：为什么需要 hutao-agent。
+2. 项目逻辑：prompting -> run -> edit -> git state -> fork/merge/revert。
+3. 数据模型：Session / Prompting / Run / Edit / Commit link / native_entry_link。
+4. 存储逻辑：.hutao/ trace facts + repo-local native-session.jsonl。
+5. 操作逻辑：查看、询问、fork、merge、revert、doctor、stage trace。
+6. 对应指令：/hutao /session /prompting /run /edit /git /fork /merge /doctor 等。
+7. 内部执行规范：真实仓库路径、测试命令、安全规则、提交规则。
+8. 致谢与用途声明必须保留在 README 前部。
+```
+
+README 不展示：
+
+```text
+1. 尚未实现的功能清单。
+2. 当前失败、历史失败、坏消息、临时 bug 记录。
+3. 过度 Roadmap 承诺。
+4. “完整恢复 / 100% 复现 / 自动解决所有冲突”等夸大表述。
+5. 压缩交接中的调试副作用。
+```
+
+这些真实内部状态必须留在 AGENTS.md，而不是 README。
+
+### 39.2 最新已完成并推送的实现 checkpoint
+
+最近已推送到 origin/main 的 checkpoint：
+
+```text
+c5babda feat(hutao): add process action registry
+5516539 feat(hutao): add ephemeral read-only inquiry flow
+5c1ea0a feat(hutao): add git branch policy for forks
+b4f57dd feat(hutao): route inquiry promotion through fork flow
+e17e944 feat(hutao): harden repo-local resume diagnostics
+b790ee6 feat(hutao): link edits to native entries
+```
+
+这些 checkpoint 当前可作为 README 的“已实现能力”来源。
+
+### 39.3 最新准确内部状态
+
+当前可以内部确认：
+
+```text
+1. process action registry 已落地。
+2. prompting/edit detail action menu 已落地。
+3. ephemeral read-only inquiry flow 已落地。
+4. inquiry promote 可以显式创建 forkSession，并将 follow-up message 交给 fresh fork context。
+5. GitBranchPolicy 已落地，forkSession/native branch/Git branch 分层。
+6. repo-local resume diagnostics 已增强，doctor 能报告 clone-safety、raw-only、incomplete native history。
+7. clone/copy path integration test 已覆盖 ${REPO} path hydration 与 repo-local native session list/open/resume。
+8. native_entry_link 已能直接关联 prompting/run/edit。
+9. related_edit / related_edits 已落地。
+10. ForkTargetResolver 对 edit after 可通过 edit 级 native link 命中 toolResult/native entry。
+```
+
+### 39.4 最新验证过的命令
+
+最近两个 checkpoint 已验证：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/integration.test.ts test/hutao/process-tree-relations.test.ts
+npm --prefix packages/coding-agent run build
+git diff --check
+```
+
+以及 Hutao 相关测试集合：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/subagent-read-model.test.ts
+```
+
+### 39.5 后续文档纪律
+
+```text
+1. README 只写已实现、可解释、可操作的能力。
+2. AGENTS.md 记录真实内部状态、风险、未完成项、验收要求。
+3. 修改 README 前必须先读本节。
+4. 不要再把前置致谢移到 README 底部。
+5. README 可以详细，但必须保持正向、清晰、可信。
+```
