@@ -1394,3 +1394,96 @@ Acceptance criteria for the fix:
 ```
 
 Do not claim clone-after-push chat resume is fully working until this exact scenario is fixed and verified.
+
+## Compaction handoff update — ciallo has native-session but resume picker shows no current-folder sessions
+
+A newer verification on server `152.42.205.229` exposed a second repo-local resume bug distinct from the earlier raw-only case.
+
+Observed workflow:
+
+```text
+1. User cloned https://github.com/hongyue0721/ciallo.git on server 152.42.205.229.
+2. User entered /root/ciallo and ran hutao.
+3. Hutao startup printed: Found 1 Hutao sessions. Use /session to browse and resume.
+4. Hutao also warned about trace files: hutao trace: unstaged 1.
+5. User opened the native Resume Session picker for Current Folder.
+6. Picker showed: No sessions in current folder. Press Tab to view all.
+7. Import History / history_only worked, but that is not native chat resume.
+```
+
+Read-only verification performed:
+
+```bash
+ssh root@152.42.205.229 'cd ~/ciallo && git status -sb && git status --short .hutao && find .hutao/sessions -maxdepth 2 -type f -name native-session.jsonl -print && git ls-files .hutao | grep native-session && find .hutao/sessions -maxdepth 2 -type f | sort'
+```
+
+Verified facts:
+
+```text
+Repository: /root/ciallo
+Branch: master...origin/master
+Hutao session id: sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2
+
+The repo DOES contain a native conversation file:
+.hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl
+
+The native-session file is tracked by Git:
+.hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/native-session.jsonl
+
+The session also contains:
+.hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/events.jsonl
+.hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/raw.jsonl
+.hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/session.json
+
+Current dirty trace files at verification time:
+ M .hutao/manifest.json
+ M .hutao/sessions/sess_019e7ecf-ce91-7547-afff-db1fc7e3d8e2/events.jsonl
+```
+
+Root cause conclusion:
+
+```text
+This is NOT the old raw-only missing-native-session problem.
+The ciallo repo has a tracked native-session.jsonl, and Hutao startup discovers the Hutao session.
+However, the native Resume Session picker still says "No sessions in current folder".
+Therefore repo-local Hutao native sessions are not correctly integrated into the Current Folder resume picker, or the picker filters them out incorrectly.
+```
+
+Most likely implementation causes to inspect:
+
+```text
+1. Resume picker is still primarily listing Pi/global session stores and not merging repo-local .hutao/sessions/*/native-session.jsonl.
+2. Current Folder filtering compares absolute cwd paths, while repo-local native sessions store portable cwd like ".".
+3. SessionManager can read/write repo-local native sessions, but session selector/search UI may not receive the repo-local sessionDir.
+4. The startup trace message and /session command use Hutao registry/read-model, while Resume Session picker uses a separate native session listing path.
+```
+
+Important distinction:
+
+```text
+/merge session --history or "History imported. No code changes were applied" is not resume.
+It imports historical trace context only and should not be treated as opening the original native chat.
+```
+
+Next implementation task:
+
+```text
+Fix the native Resume Session picker path so repo-local native sessions under:
+.hutao/sessions/<session_id>/native-session.jsonl
+appear in "Resume Session (Current Folder)" for the current Git repo.
+```
+
+Acceptance criteria for this bug:
+
+```text
+1. Clone a repo that already contains .hutao/sessions/<id>/native-session.jsonl.
+2. cd into the repo root.
+3. Run hutao.
+4. Open Resume Session (Current Folder).
+5. The repo-local native session appears as a resumable session.
+6. Selecting it opens the native chat entries, not just /session trace history.
+7. Current Folder filtering works with portable cwd values such as ".".
+8. /merge session --history remains history import only and is not confused with resume.
+```
+
+Do not claim repo-local native resume is complete until ciallo-style repos with a tracked `native-session.jsonl` appear in the native resume picker.
