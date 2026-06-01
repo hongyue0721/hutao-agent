@@ -37,7 +37,12 @@ import {
 	MissingSessionCwdError,
 	type SessionCwdIssue,
 } from "./core/session-cwd.ts";
-import { assertValidSessionId, getCurrentFolderResumeSessionDir, getRepoLocalSessionDir, SessionManager } from "./core/session-manager.ts";
+import {
+	assertValidSessionId,
+	getCurrentFolderResumeSessionDir,
+	getRepoLocalSessionDir,
+	SessionManager,
+} from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";

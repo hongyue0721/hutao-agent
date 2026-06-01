@@ -181,6 +181,145 @@ function renderPromptingTree(lines: string[], events: HutaoEvent[], promptings: 
 	}
 }
 
+type PromptingTreeNodeKind = "session" | "prompting" | "run" | "edit" | "commit" | "merge";
+
+interface PromptingTreeNode {
+	kind: PromptingTreeNodeKind;
+	id: string;
+	label: string;
+	depth: number;
+	event?: HutaoEvent;
+}
+
+function treePrefix(depth: number, isLast: boolean): string {
+	if (depth <= 0) return "";
+	return `${"│  ".repeat(Math.max(0, depth - 1))}${isLast ? "└─ " : "├─ "}`;
+}
+
+function pushPromptingTreeNode(
+	nodes: PromptingTreeNode[],
+	kind: PromptingTreeNodeKind,
+	id: string,
+	label: string,
+	depth: number,
+	event?: HutaoEvent,
+): void {
+	nodes.push({ kind, id, label, depth, event });
+}
+
+function buildPromptingTreeNodes(
+	repoRoot: string,
+	events: HutaoEvent[],
+	promptings: HutaoEvent[],
+): PromptingTreeNode[] {
+	const registry = new SessionRegistry(repoRoot);
+	const sessions = registry.readSessions();
+	const sessionIds = new Set(promptings.map((event) => String(event.session_id ?? "")));
+	const knownSessions = sessions.filter((session) => sessionIds.has(session.id));
+	const orphanSessionIds = [...sessionIds].filter((id) => id && !knownSessions.some((session) => session.id === id));
+	const sessionEntries = [
+		...knownSessions.map((session) => ({ id: session.id, kind: session.kind, status: session.status })),
+		...orphanSessionIds.map((id) => ({ id, kind: "session", status: "unknown" })),
+	];
+	const nodes: PromptingTreeNode[] = [];
+	for (const session of sessionEntries) {
+		const sessionPromptings = promptings.filter((event) => event.session_id === session.id);
+		if (sessionPromptings.length === 0) continue;
+		pushPromptingTreeNode(
+			nodes,
+			"session",
+			session.id,
+			`Session ${shortId(session.id)} ${session.kind} ${session.status} promptings=${sessionPromptings.length}`,
+			0,
+		);
+		for (const [promptingIndex, prompting] of sessionPromptings.entries()) {
+			const runsById = new Map<string, HutaoEvent>();
+			for (const event of events.filter(
+				(entry) =>
+					(entry.type === "run_finished" || entry.type === "run_started") &&
+					entry.parent_prompting === prompting.id,
+			)) {
+				const existing = runsById.get(String(event.id));
+				if (!existing || event.type === "run_finished") runsById.set(String(event.id), event);
+			}
+			const runs = [...runsById.values()];
+			const runIds = new Set(runs.map((run) => String(run.id)));
+			const edits = events.filter((event) => event.type === "edit" && event.parent_prompting === prompting.id);
+			const commits = relatedCommits(events, prompting.id, "prompting_ids");
+			const childCount =
+				runs.length + edits.filter((edit) => !runIds.has(String(edit.parent_run))).length + commits.length;
+			pushPromptingTreeNode(
+				nodes,
+				"prompting",
+				String(prompting.id),
+				`${treePrefix(1, promptingIndex === sessionPromptings.length - 1)}Prompting ${shortId(prompting.id)} ${eventTitle(prompting)}`,
+				1,
+				prompting,
+			);
+			let childIndex = 0;
+			for (const run of runs) {
+				const runEdits = relatedEditsForRun(events, run.id);
+				const runIsLast = childIndex === childCount - 1;
+				pushPromptingTreeNode(
+					nodes,
+					"run",
+					String(run.id),
+					`${treePrefix(2, runIsLast)}Run ${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? (run.type === "run_started" ? "started" : "unknown")} ${firstLine(run.input_summary ?? run.output_summary ?? "")}`,
+					2,
+					run,
+				);
+				childIndex += 1;
+				for (const [editIndex, edit] of runEdits.entries()) {
+					pushPromptingTreeNode(
+						nodes,
+						"edit",
+						String(edit.id),
+						`${treePrefix(3, editIndex === runEdits.length - 1)}Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ") || firstLine(edit.summary) || "no files"}`,
+						3,
+						edit,
+					);
+				}
+			}
+			for (const edit of edits.filter((entry) => !runIds.has(String(entry.parent_run)))) {
+				const isLast = childIndex === childCount - 1;
+				pushPromptingTreeNode(
+					nodes,
+					"edit",
+					String(edit.id),
+					`${treePrefix(2, isLast)}Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ") || firstLine(edit.summary) || "no files"}`,
+					2,
+					edit,
+				);
+				childIndex += 1;
+			}
+			for (const commit of commits) {
+				const isLast = childIndex === childCount - 1;
+				pushPromptingTreeNode(nodes, "commit", commit, `${treePrefix(2, isLast)}Commit ${commit.slice(0, 12)}`, 2);
+				childIndex += 1;
+			}
+		}
+	}
+	return nodes;
+}
+
+async function runPromptingTree(
+	repoRoot: string,
+	events: HutaoEvent[],
+	promptings: HutaoEvent[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const nodes = buildPromptingTreeNodes(repoRoot, events, promptings);
+	const selected = await selectItem(ctx, "Hutao prompting tree", nodes, (node) => node.label);
+	if (!selected)
+		return notify(ctx, "Hutao prompting", [promptings.length ? "No tree node selected." : "No promptings found."]);
+	if (selected.kind === "session") return sessionCommand(selected.id, ctx);
+	if (selected.kind === "prompting") return promptingCommand(selected.id, ctx);
+	if (selected.kind === "run") return runCommand(selected.id, ctx);
+	if (selected.kind === "edit") return editCommand(selected.id, ctx);
+	if (selected.kind === "commit") return gitCommand(selected.id, ctx);
+	if (selected.kind === "merge") return mergeCommand(`session ${selected.id}`, ctx);
+}
+
 function renderMergeLine(event: HutaoEvent): string {
 	return `${shortId(event.id)} ${event.mode ?? ""} ${event.status ?? ""} source=${shortId(event.source_session)} applied=${stringArray(event.applied_edits).length} conflicts=${stringArray(event.conflict_edits).length} resolutions=${stringArray(event.resolution_edits).join(",") || "none"}`;
 }
@@ -256,21 +395,31 @@ async function resumeSession(sessionId: string, repoRoot: string, ctx: Extension
 
 	const current = registry.readCurrentSessionId();
 	if (current === sessionId) {
-		notify(ctx, "Hutao resume", [
-			`Current Hutao trace session is already ${sessionId}, but native-session.jsonl is missing.`,
-			"Only trace history is available; native chat context cannot be resumed.",
-		], "warning");
+		notify(
+			ctx,
+			"Hutao resume",
+			[
+				`Current Hutao trace session is already ${sessionId}, but native-session.jsonl is missing.`,
+				"Only trace history is available; native chat context cannot be resumed.",
+			],
+			"warning",
+		);
 		return;
 	}
 	const continuation = await registry.createContinuationSession(session.id);
 	if (!continuation)
 		return notify(ctx, "Hutao resume", [`Failed to create continuation for ${session.id}`], "warning");
 	rebuildIndex(repoRoot);
-	notify(ctx, "Hutao resume", [
-		`native-session.jsonl is missing for ${session.id}; created degraded continuation forkSession ${continuation.id}`,
-		`parent session: ${session.id}`,
-		"Continue chatting normally; trace promptings/runs/edits will be recorded in the continuation session.",
-	], "warning");
+	notify(
+		ctx,
+		"Hutao resume",
+		[
+			`native-session.jsonl is missing for ${session.id}; created degraded continuation forkSession ${continuation.id}`,
+			`parent session: ${session.id}`,
+			"Continue chatting normally; trace promptings/runs/edits will be recorded in the continuation session.",
+		],
+		"warning",
+	);
 }
 
 async function runSessionConversationAction(
@@ -607,6 +756,8 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 	const sessionFilter = getFlagValue(parts, "--session");
 	const commitFilter = getFlagValue(parts, "--commit");
 	const fileFilter = getFlagValue(parts, "--file");
+	const listMode = parts.includes("--list");
+	const detailQuery = parts.find((part) => !part.startsWith("--") && part !== "search");
 	if (sessionFilter) promptings = promptings.filter((event) => String(event.session_id).startsWith(sessionFilter));
 	if (commitFilter) {
 		const ids = commitLinkedIds(events, commitFilter, "prompting_ids");
@@ -625,6 +776,7 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 		promptings = promptings.filter((event) => eventText(event).includes(searchText));
 	}
 	if (!query || query.startsWith("--") || parts[0] === "search") {
+		if (!listMode) return runPromptingTree(repoRoot, events, promptings, ctx);
 		const selected = await selectItem(
 			ctx,
 			t(repoRoot, "prompting.select.title"),
@@ -640,8 +792,8 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 			]);
 		return runPromptingAction(selected, repoRoot, ctx);
 	}
-	const prompting = findEvent(events, query, "prompting");
-	if (!prompting) return notify(ctx, "Hutao prompting", [`Not found: ${query}`], "warning");
+	const prompting = findEvent(events, detailQuery ?? query, "prompting");
+	if (!prompting) return notify(ctx, "Hutao prompting", [`Not found: ${detailQuery ?? query}`], "warning");
 	const runs = events.filter(
 		(event) =>
 			(event.type === "run_finished" || event.type === "run_started") && event.parent_prompting === prompting.id,

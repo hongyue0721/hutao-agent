@@ -4459,7 +4459,9 @@ export class InteractiveMode {
 						void debugLines(sessions.length)
 							.then((lines) => this.showStatus(`Resume debug\n${lines.join("\n")}`))
 							.catch((error: unknown) =>
-								this.showWarning(`Resume debug failed: ${error instanceof Error ? error.message : String(error)}`),
+								this.showWarning(
+									`Resume debug failed: ${error instanceof Error ? error.message : String(error)}`,
+								),
 							);
 					}
 					return sessions;

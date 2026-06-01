@@ -80,7 +80,11 @@ const commandMessages: Array<{
 	options?: unknown;
 }> = [];
 const commandAppendedEntries: Array<{ customType: string; data?: unknown }> = [];
-const commandSwitches: Array<{ sessionPath: string; options?: { withSession?: (ctx: ExtensionCommandContext) => Promise<void> } }> = [];
+const commandSwitches: Array<{
+	sessionPath: string;
+	options?: { withSession?: (ctx: ExtensionCommandContext) => Promise<void> };
+}> = [];
+const commandSelectCalls: Array<{ title: string; options: string[] }> = [];
 
 function makeCommandContext(repo: string): ExtensionCommandContext {
 	return {
@@ -91,7 +95,8 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 				commandNotifications.push(message);
 			},
 			confirm: async () => true,
-			select: async (_title: string, options: string[]) => {
+			select: async (title: string, options: string[]) => {
+				commandSelectCalls.push({ title, options });
 				const requested = commandSelections.shift();
 				if (!requested) return options[0];
 				const aliases: Record<string, string[]> = {
@@ -142,6 +147,7 @@ afterEach(() => {
 	commandMessages.length = 0;
 	commandAppendedEntries.length = 0;
 	commandSwitches.length = 0;
+	commandSelectCalls.length = 0;
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -203,7 +209,9 @@ describe("Hutao integration safety", () => {
 		expect(commandSwitches[0].sessionPath).toBe(nativeSession.getSessionFile());
 		expect(new SessionRegistry(repo).readCurrentSessionId()).toBe(nativeSession.getSessionId());
 		expect(commandNotifications.at(-1)).toContain("Resumed native Hutao session");
-		expect(commandNotifications.at(-1)).toContain("Previous user/assistant/tool entries are now loaded as chat context");
+		expect(commandNotifications.at(-1)).toContain(
+			"Previous user/assistant/tool entries are now loaded as chat context",
+		);
 	});
 
 	it("previews and queues conversation hydration as next-turn custom context", async () => {
@@ -374,6 +382,42 @@ describe("Hutao integration safety", () => {
 		expect(commandNotifications.at(-1)).toContain("History imported");
 		expect(commandNotifications.at(-1)).toContain("No code changes were applied");
 		expect(commandAppendedEntries.at(-1)?.customType).toBe("hutao_merge");
+	});
+
+	it("opens prompting as an interactive tree by default and dispatches selected nodes to details", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "tree-default");
+		const prompting = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting");
+		expect(prompting?.id).toBeDefined();
+
+		commandSelections.push(String(prompting?.id).slice(0, 20));
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-1)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Session sess_");
+		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Prompting p_");
+		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Run r_");
+		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Edit e_");
+		expect(commandNotifications.at(-1)).toContain(`Prompting ${prompting?.id}`);
+		expect(commandNotifications.at(-1)).toContain("change to tree-default");
+
+		commandSelections.push(editId.slice(0, 20));
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
+		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
+	it("keeps the old prompting picker behind --list", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		await recordFileEdit(repo, "list-mode");
+
+		await promptingCommand("--list", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-1)?.title).not.toBe("Hutao prompting tree");
+		expect(commandNotifications.at(-1)).toContain("change to list-mode");
 	});
 
 	it("filters prompting and edit lists", async () => {
