@@ -16,6 +16,18 @@ import { buildPromptingTreeNodes, renderPromptingTree } from "./prompting-tree.t
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
+import {
+	getCommitLinkedIds,
+	getCommitsForEdit,
+	getCommitsForPrompting,
+	getCommitsForRun,
+	getEditsForRun,
+	getEditsForSubagent,
+	getMergesForEdit,
+	getRunsForSubagent,
+	getSubagents,
+	stringArray,
+} from "./trace-relations.ts";
 import { getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
 
 function readEvents(repoRoot: string): HutaoEvent[] {
@@ -62,22 +74,8 @@ function eventTouchesFile(event: HutaoEvent, file: string): boolean {
 	return stringArray(event.files).some((entry) => entry === file || entry.endsWith(`/${file}`));
 }
 
-function commitLinkedIds(events: HutaoEvent[], commit: string, field: "prompting_ids" | "edit_ids"): Set<string> {
-	const ids = new Set<string>();
-	for (const event of events.filter(
-		(entry) => entry.type === "commit_link" && String(entry.commit).startsWith(commit),
-	)) {
-		for (const id of stringArray(event[field])) ids.add(id);
-	}
-	return ids;
-}
-
 function getRepoRoot(ctx: ExtensionCommandContext): Promise<string | undefined> {
 	return new GitAdapter(ctx.cwd).getRepoRoot();
-}
-
-function stringArray(value: unknown): string[] {
-	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 function firstLine(value: unknown, maxLength = 120): string {
@@ -88,50 +86,6 @@ function firstLine(value: unknown, maxLength = 120): string {
 
 function eventTitle(event: HutaoEvent): string {
 	return firstLine(event.text ?? event.summary ?? event.tool ?? event.id);
-}
-
-function relatedCommits(events: HutaoEvent[], id: unknown, field: "prompting_ids" | "edit_ids" | "run_ids"): string[] {
-	const value = String(id ?? "");
-	return events
-		.filter((event) => event.type === "commit_link" && stringArray(event[field]).includes(value))
-		.map((event) => String(event.commit));
-}
-
-function relatedMerges(events: HutaoEvent[], id: unknown): HutaoEvent[] {
-	const value = String(id ?? "");
-	return events.filter(
-		(event) =>
-			event.type === "merge" &&
-			(stringArray(event.imported_edits).includes(value) ||
-				stringArray(event.applied_edits).includes(value) ||
-				stringArray(event.conflict_edits).includes(value) ||
-				stringArray(event.skipped_edits).includes(value) ||
-				stringArray(event.resolution_edits).includes(value)),
-	);
-}
-
-function relatedEditsForRun(events: HutaoEvent[], runId: unknown): HutaoEvent[] {
-	const value = String(runId ?? "");
-	const explicit = events.filter((event) => event.type === "edit" && event.parent_run === value);
-	if (explicit.length > 0) return explicit;
-	return events.filter((event) => event.type === "edit" && stringArray(event.produced_edit_ids).includes(value));
-}
-
-function isSubagentEvent(event: HutaoEvent): boolean {
-	return event.type === "subagent" || event.type === "subagent_started" || event.type === "subagent_finished";
-}
-
-function readSubagentEvents(events: HutaoEvent[]): HutaoEvent[] {
-	const subagentsById = new Map<string, HutaoEvent>();
-	for (const event of events.filter(isSubagentEvent)) {
-		const id = String(event.id ?? "");
-		if (!id) continue;
-		const existing = subagentsById.get(id);
-		if (!existing || event.type === "subagent_finished" || existing.type === "subagent_started") {
-			subagentsById.set(id, { ...existing, ...event });
-		}
-	}
-	return [...subagentsById.values()];
 }
 
 function editPatchPath(repoRoot: string, edit: HutaoEvent): string | undefined {
@@ -640,7 +594,7 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 	const detailQuery = parts.find((part) => !part.startsWith("--") && part !== "search");
 	if (sessionFilter) promptings = promptings.filter((event) => String(event.session_id).startsWith(sessionFilter));
 	if (commitFilter) {
-		const ids = commitLinkedIds(events, commitFilter, "prompting_ids");
+		const ids = getCommitLinkedIds(events, commitFilter, "prompting_ids");
 		promptings = promptings.filter((event) => ids.has(String(event.id)));
 	}
 	if (fileFilter) {
@@ -679,7 +633,7 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 			(event.type === "run_finished" || event.type === "run_started") && event.parent_prompting === prompting.id,
 	);
 	const edits = events.filter((event) => event.type === "edit" && event.parent_prompting === prompting.id);
-	const commits = relatedCommits(events, prompting.id, "prompting_ids");
+	const commits = getCommitsForPrompting(events, prompting.id);
 	const lines = [
 		`session: ${prompting.session_id}`,
 		`git_head: ${prompting.git_head ?? "unknown"}`,
@@ -718,7 +672,7 @@ export async function subagentCommand(args: string, ctx: ExtensionCommandContext
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao subagent", ["Not in a Git repository."], "warning");
 	const events = readEvents(repoRoot);
-	let subagents = readSubagentEvents(events);
+	let subagents = getSubagents(events);
 	const query = args.trim();
 	const parts = query.split(/\s+/).filter(Boolean);
 	const sessionFilter = getFlagValue(parts, "--session");
@@ -741,11 +695,8 @@ export async function subagentCommand(args: string, ctx: ExtensionCommandContext
 	const subagent = subagents.find((event) => String(event.id).startsWith(query));
 	if (!subagent) return notify(ctx, "Hutao subagent", [`Not found: ${query}`], "warning");
 	const subagentId = String(subagent.id);
-	const runs = events.filter(
-		(event) =>
-			(event.type === "run_finished" || event.type === "run_started") && event.parent_subagent === subagentId,
-	);
-	const edits = events.filter((event) => event.type === "edit" && event.parent_subagent === subagentId);
+	const runs = getRunsForSubagent(events, subagentId);
+	const edits = getEditsForSubagent(events, subagentId);
 	const lines = [
 		`session: ${subagent.session_id ?? "unknown"}`,
 		`parent prompting: ${subagent.parent_prompting ?? "none"}`,
@@ -793,8 +744,8 @@ export async function runCommand(args: string, ctx: ExtensionCommandContext): Pr
 	}
 	const run = findEvent(events, query, "run_finished") ?? findEvent(events, query, "run_started");
 	if (!run) return notify(ctx, "Hutao run", [`Not found: ${query}`], "warning");
-	const edits = relatedEditsForRun(events, run.id);
-	const commits = relatedCommits(events, run.id, "run_ids");
+	const edits = getEditsForRun(events, run.id);
+	const commits = getCommitsForRun(events, run.id);
 	const lines = [
 		`session: ${run.session_id ?? "unknown"}`,
 		`parent prompting: ${run.parent_prompting ?? "none"}`,
@@ -856,7 +807,7 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 	if (sessionFilter) edits = edits.filter((event) => String(event.session_id).startsWith(sessionFilter));
 	if (promptingFilter) edits = edits.filter((event) => String(event.parent_prompting).startsWith(promptingFilter));
 	if (commitFilter) {
-		const ids = commitLinkedIds(events, commitFilter, "edit_ids");
+		const ids = getCommitLinkedIds(events, commitFilter, "edit_ids");
 		edits = edits.filter((event) => ids.has(String(event.id)));
 	}
 	if (fileFilter) edits = edits.filter((event) => eventTouchesFile(event, fileFilter));
@@ -886,8 +837,8 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 	if (!edit) return notify(ctx, "Hutao edit", [`Not found: ${query}`], "warning");
 	const patchPath = join(repoRoot, ".hutao", "sessions", String(edit.session_id), String(edit.patch));
 	const patchPreview = existsSync(patchPath) ? readFileSync(patchPath, "utf-8").slice(0, 5000) : "[patch missing]";
-	const commits = relatedCommits(events, edit.id, "edit_ids");
-	const merges = relatedMerges(events, edit.id);
+	const commits = getCommitsForEdit(events, edit.id);
+	const merges = getMergesForEdit(events, edit.id);
 	const revertedBy = events.filter((event) => event.type === "edit_reverted" && event.edit_id === edit.id);
 	const lines = [
 		`summary: ${edit.summary ?? ""}`,
