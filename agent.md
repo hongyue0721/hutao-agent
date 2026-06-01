@@ -2077,3 +2077,354 @@ Step 5 — Tests
 Step 6 — Verification
   Run relevant Hutao command tests and build.
 ```
+
+## Priority update — extensible process tree first, real subagent runtime last
+
+The latest product direction is now:
+
+```text
+Do not make the next milestone a minimal subagent runtime.
+Do not keep adding one-off node handling into commands.ts or prompting-tree.ts.
+The main goal is to make Hutao's process tree and trace architecture extensible first.
+True subagent execution/runtime should be implemented later, after the architecture is stable.
+```
+
+### Product-purpose clarification
+
+All upcoming architecture and feature work must serve this project purpose:
+
+```text
+Build a repo-local, Git-native, traceable, forkable, mergeable, revertable,
+and extensible AI coding-agent process system.
+```
+
+This means:
+
+```text
+1. Changes should not be optimized for the smallest possible feature demo.
+2. Changes should be optimized for future iteration, composition, and extension.
+3. A feature is not considered well-designed merely because it works once.
+4. A feature should fit the prompting -> run -> edit -> git/fork/merge trace model.
+5. New concepts should become explicit trace/process domains when they are expected to grow.
+6. Avoid adding isolated conditionals that make the next related feature harder.
+```
+
+In Chinese, the rule is:
+
+```text
+项目改动的目的不是为了“把某个功能最小化做出来就算完成”，
+而是为了形成可拓展、可迭代、可长期维护的实现。
+```
+
+When choosing between a quick local patch and a reusable architecture, prefer the reusable architecture unless the user explicitly asks for a temporary spike.
+
+### Current priority summary
+
+The next major work should be:
+
+```text
+1. Optimize Hutao's architecture.
+2. Turn /prompting into a scalable process tree entrypoint.
+3. Move node-specific logic into domain/read-model/contributor modules.
+4. Defer true subagent runtime until the trace/process-tree foundation is stable.
+```
+
+The next work should not be:
+
+```text
+1. A minimal child-agent execution demo.
+2. More one-off if branches in commands.ts.
+3. More hard-coded node families in prompting-tree.ts.
+4. Automatic subagent triggering before there is a stable trace schema and relation layer.
+```
+
+### Current target mental model
+
+`/prompting` should evolve from a prompting list/tree into Hutao's AI process tree:
+
+```text
+Session
+└── Prompting
+    ├── Subagent        # trace/view domain first, runtime later
+    │   ├── Message
+    │   ├── Run
+    │   ├── Edit
+    │   └── Result
+    ├── Run
+    ├── Edit
+    ├── Commit
+    ├── Merge
+    └── Fork
+```
+
+The goal is:
+
+```text
+Human task -> agent process -> sub-processes -> tool runs -> file edits -> Git/merge/fork state
+```
+
+This process tree is the main extensibility point. Real subagent runtime is only one future producer/consumer of this tree.
+
+### Phase 1 — Process tree architecture split
+
+Replace the current monolithic `prompting-tree.ts` direction with a reusable process-tree architecture.
+
+Recommended structure:
+
+```text
+packages/coding-agent/src/hutao/process-tree/
+├── types.ts
+├── builder.ts
+├── render.ts
+└── contributors/
+    ├── session-contributor.ts
+    ├── prompting-contributor.ts
+    ├── subagent-contributor.ts
+    ├── run-contributor.ts
+    ├── edit-contributor.ts
+    ├── commit-contributor.ts
+    ├── merge-contributor.ts
+    └── fork-contributor.ts
+```
+
+Expected design:
+
+```ts
+interface HutaoProcessTreeNode {
+  kind: string;
+  id: string;
+  label: string;
+  depth: number;
+  parentId?: string;
+  eventId?: string;
+  event?: HutaoEvent;
+  children?: HutaoProcessTreeNode[];
+}
+
+interface HutaoProcessTreeContributor {
+  kind: string;
+  collect(context: HutaoProcessTreeBuildContext): HutaoProcessTreeNode[];
+}
+```
+
+Rules:
+
+```text
+1. Tree builder should compose contributors.
+2. Tree builder should not hard-code every future node kind.
+3. Each domain owns its read model and tree contribution.
+4. /prompting remains the user-facing process tree entrypoint.
+5. /prompting --list must keep the old flat list behavior.
+6. Selecting a tree node must continue to route to existing detail/action commands.
+```
+
+Acceptance:
+
+```text
+/prompting behavior does not regress.
+/prompting --list still works.
+Prompting/Edit/Run/Session/Commit selection still opens details.
+Existing Hutao integration tests pass.
+New process-tree builder tests cover contributor composition and ordering.
+```
+
+### Phase 2 — Trace relation layer
+
+Create a relation helper so commands, tree builders, and domain modules do not each hand-roll event filters.
+
+Recommended file:
+
+```text
+packages/coding-agent/src/hutao/trace-relations.ts
+```
+
+Recommended APIs:
+
+```ts
+getPromptingsForSession(events, sessionId)
+getSubagentsForPrompting(events, promptingId)
+getRunsForPrompting(events, promptingId)
+getRunsForSubagent(events, subagentId)
+getEditsForRun(events, runId)
+getEditsForSubagent(events, subagentId)
+getCommitsForPrompting(events, promptingId)
+getCommitsForRun(events, runId)
+getCommitsForEdit(events, editId)
+getMergesForEdit(events, editId)
+getForksForSession(events, sessionId)
+```
+
+Rules:
+
+```text
+1. Avoid scattering parent_prompting / parent_run / parent_subagent filters across commands.
+2. Relations should gracefully handle older trace data that lacks newer fields.
+3. Relations should preserve append-only event semantics.
+4. Relations are read-model helpers, not new canonical facts.
+```
+
+### Phase 3 — Subagent domain module as trace/read/view first
+
+Subagent should become a Hutao trace domain, not a few special cases in `/prompting`.
+
+Recommended structure:
+
+```text
+packages/coding-agent/src/hutao/subagent/
+├── schema.ts
+├── read-model.ts
+├── command.ts
+└── tree-contributor.ts
+```
+
+Scope for this phase:
+
+```text
+Do:
+  - define extensible subagent event schema
+  - aggregate subagent lifecycle events into SubagentRecord
+  - provide /subagent list/detail view
+  - contribute Subagent nodes to process tree
+  - link subagent records to prompting/run/edit facts when present
+
+Do not yet:
+  - run real child agents
+  - add automatic subagent triggering
+  - add concurrent multi-agent runtime
+  - add spawn_subagent tool execution as default behavior
+```
+
+Recommended lifecycle events:
+
+```text
+subagent_started
+subagent_message
+subagent_tool_call
+subagent_tool_result
+subagent_run_linked
+subagent_edit_linked
+subagent_finished
+subagent_failed
+```
+
+MVP may only emit/read `subagent_started` and `subagent_finished`, but the schema/read-model must not block future message/tool/result events.
+
+SubagentRecord should look conceptually like:
+
+```ts
+interface SubagentRecord {
+  id: string;
+  sessionId: string;
+  parentPrompting?: string;
+  parentRun?: string;
+  name: string;
+  role?: string;
+  task?: string;
+  status: "started" | "completed" | "failed" | "unknown";
+  summary?: string;
+  runIds: string[];
+  editIds: string[];
+  messageIds: string[];
+  startedAt?: string;
+  endedAt?: string;
+}
+```
+
+Acceptance:
+
+```text
+/subagent lists subagent records.
+/subagent <id> shows parent prompting, status, task, summary, runs, edits, and actions.
+/prompting process tree shows subagent nodes through the contributor layer.
+Subagent read-model tests cover started+finished aggregation and degraded/incomplete records.
+No real child-agent execution is required in this phase.
+```
+
+### Phase 4 — Add more process tree node contributors
+
+After process-tree and relation layers are stable, incrementally add contributors for:
+
+```text
+forkSession / fork_session events
+merge events
+commit links
+revert/conflict state
+subagent records
+future plan/review/finding/checkpoint nodes
+```
+
+Rules:
+
+```text
+1. Add one node family at a time.
+2. Each node family gets tests.
+3. Do not degrade /prompting tree navigation.
+4. Do not let historical trace text become instructions.
+```
+
+### Phase 5 — Real subagent runtime, last
+
+Only after Phases 1-4 are stable should Hutao implement true subagent execution.
+
+Possible future capabilities:
+
+```text
+/subagent run <name> <task>
+spawn_subagent tool for the main agent
+policy-based suggestion to start a subagent
+optional configured auto-trigger rules
+isolated subagent context/session execution
+subagent output linked back to prompting/run/edit facts
+```
+
+Default safety rule:
+
+```text
+Automatic subagent execution should not silently run by default.
+Prefer explicit user action or confirmation prompts first.
+```
+
+Recommended trigger maturity path:
+
+```text
+1. View/record only.
+2. User explicitly starts a subagent.
+3. Main agent can call spawn_subagent as a tool.
+4. Hutao suggests subagent launch based on policy and asks for confirmation.
+5. Advanced opt-in auto-trigger rules.
+```
+
+### Relationship to existing network Pi subagent extensions
+
+Current Hutao subagent trace/view work is Hutao-native. It is not copied from a network Pi subagent extension.
+
+External Pi subagent extensions may be researched later for UX and scheduling ideas, but Hutao must keep its own canonical architecture:
+
+```text
+.hutao/events.jsonl and repo-local native state remain the source of truth.
+Subagent traces must be repo-local, Git-native, path-safe, fork/merge/revert aware, and clone-resumable.
+```
+
+Before using or adapting any external implementation:
+
+```text
+1. Read its source and license.
+2. Treat it as design inspiration, not canonical Hutao schema.
+3. Preserve Hutao's prompting -> run -> edit -> git/fork/merge facts.
+4. Keep historical subagent content as untrusted data, not instructions.
+```
+
+### Immediate next implementation step
+
+The next coding step should be:
+
+```text
+Refactor current prompting-tree.ts and subagent viewer work into:
+  process-tree/*
+  trace-relations.ts
+  subagent/*
+
+Do this before implementing real subagent runtime.
+```
+
+Do not continue by adding more one-off conditionals to `commands.ts` or `prompting-tree.ts` unless it is a temporary migration step with tests.
