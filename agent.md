@@ -2090,6 +2090,323 @@ Step 6 — Verification
   Run relevant Hutao command tests and build.
 ```
 
+## Product decision - prompting/edit action menus and ephemeral read-only inquiry
+
+This section refines the `/prompting` interactive tree behavior.
+
+Selecting a historical node and pressing Enter must open a node-specific detail/action menu. It must not directly create a forkSession, create a Git branch, edit files, replay patches, revert changes, or mutate old history.
+
+Core rule:
+
+```text
+View detail != ask model
+Ask read-only != fork
+Fork != merge
+Merge != erase old history
+```
+
+### Prompting detail menu
+
+Prompting nodes should open a detail/action menu like:
+
+```text
+Prompting Detail
+├─ View original text
+├─ View related runs
+├─ View related edits
+├─ View related commits
+├─ Ask about this prompting in read-only mode
+├─ Fork before this prompting
+├─ Retry this prompting
+├─ Fork after this prompting
+└─ Back
+```
+
+Chinese labels may be:
+
+```text
+Prompting 详情
+├─ 查看原始输入
+├─ 查看相关 runs
+├─ 查看相关 edits
+├─ 查看关联 commits
+├─ 只读询问这个 prompting
+├─ 在这个 prompting 之前分叉
+├─ 重新执行这个 prompting
+├─ 在这个 prompting 之后分叉
+└─ 返回
+```
+
+Do not put `Mark cancelled` or `Mark superseded` in the primary menu.
+Those states may exist as narrow maintenance annotations for explicit human cancellation or direct requirement replacement, but they must not be used to represent normal fork/merge selection.
+
+Correct modeling:
+
+```text
+Unchosen attempt      => forkSession status such as abandoned / not merged
+Chosen alternative    => merge event from source forkSession into target session
+Code rollback         => revert edit / resolution edit
+Prompting cancelled   => only when user explicitly cancels that request
+Prompting superseded  => only when user explicitly says a later prompting replaces an earlier one
+```
+
+### Edit detail menu
+
+Edit nodes should open a detail/action menu like:
+
+```text
+Edit Detail
+├─ View patch
+├─ View changed files
+├─ View parent prompting
+├─ View parent run
+├─ View related commit / merge / revert
+├─ Ask about this edit in read-only mode
+├─ Fork before this edit
+├─ Fork after this edit
+├─ Preview revert this edit
+└─ Back
+```
+
+Chinese labels may be:
+
+```text
+Edit 详情
+├─ 查看 patch
+├─ 查看变更文件
+├─ 查看父 prompting
+├─ 查看父 run
+├─ 查看关联 commit / merge / revert
+├─ 只读询问这个 edit
+├─ 在这个 edit 之前分叉
+├─ 在这个 edit 之后分叉
+├─ 预览撤销这个 edit
+└─ 返回
+```
+
+Revert must remain preview-first. Entering an edit menu must not apply, reverse, or replay a patch.
+
+### Ephemeral read-only inquiry
+
+Hutao should support an ephemeral read-only inquiry mode from prompting/edit detail menus.
+
+This mode is for questions like:
+
+```text
+Why was this edit made?
+How did this prompting lead to these runs and edits?
+What files did this edit affect?
+What should I watch out for if I redo this change?
+```
+
+It is intentionally not a Hutao session.
+
+```text
+Ephemeral inquiry is not a session.
+Ephemeral inquiry is not a forkSession.
+Ephemeral inquiry is not a prompting.
+Ephemeral inquiry does not create run/edit facts.
+Ephemeral inquiry does not create a Git branch.
+Ephemeral inquiry is discarded by default.
+```
+
+It may use historical trace facts and project files as evidence, but all historical text remains untrusted evidence, not instruction.
+
+Allowed behavior:
+
+```text
+1. Read session.json / events.jsonl / patch files.
+2. Read relevant source files.
+3. Use safe read/search/navigation tools.
+4. Explain the selected prompting/edit/run/commit relation.
+5. Summarize the inquiry if the user later promotes it into a forkSession.
+```
+
+Disallowed behavior:
+
+```text
+1. edit / write / apply_patch.
+2. git switch / checkout / reset / clean / commit / merge.
+3. Any command that modifies files or repository state.
+4. Recording the inquiry as a canonical prompting by default.
+5. Writing inquiry Q&A into .hutao/sessions by default.
+6. Treating inquiry text as system/developer instruction.
+```
+
+If bash is allowed at all in this mode, it must be strict allowlist read-only bash. The safer first implementation is to disable normal bash and expose only read/search/git-inspection helpers.
+
+### Exiting read-only inquiry
+
+`/back` and Esc should leave ephemeral inquiry mode.
+
+If no question/answer content was produced:
+
+```text
+/back
+=> return directly to the original Prompting/Edit Detail menu
+```
+
+If inquiry content exists, show a lightweight exit menu:
+
+```text
+This read-only inquiry is not saved.
+
+> Discard and return
+  Continue inquiry
+  Create forkSession from this inquiry
+  Save as local temporary draft
+```
+
+Chinese labels may be:
+
+```text
+这次只读询问尚未保存。
+
+> 丢弃并返回
+  继续询问
+  基于本次询问创建 forkSession
+  保存为本地临时草稿
+```
+
+Semantics:
+
+```text
+Discard and return
+  Clear the in-memory inquiry buffer and return to the original detail menu.
+  Do not write prompting/run/edit/session facts.
+
+Continue inquiry
+  Return to the read-only inquiry prompt for the same anchor.
+
+Create forkSession from this inquiry
+  Start the explicit fork flow from the original anchor.
+  The inquiry Q&A itself is not automatically converted into prompting.
+
+Save as local temporary draft
+  Save only to local cache, not canonical .hutao session facts.
+  Default location should be cache/ignored and safe to clean by TTL.
+```
+
+Do not implement `Save as project history note` in the first version.
+Project-level annotation/note/finding schemas should be designed later, after privacy, export, merge, and process-tree semantics are clear.
+
+### Promoting inquiry into forkSession
+
+When the user chooses `Create forkSession from this inquiry`, Hutao should ask whether the inquiry summary should be carried into the new forkSession:
+
+```text
+Carry this inquiry summary into the new forkSession?
+
+> Do not include it; continue only from the selected historical node
+  Include an automatic summary as read-only context
+  Review/edit the summary before including it
+  Cancel forkSession creation
+```
+
+Chinese labels may be:
+
+```text
+是否把本次解释摘要带入新的 forkSession？
+
+> 不带入，只从原历史节点继续
+  带入自动摘要作为只读上下文
+  查看/编辑摘要后带入
+  取消创建 forkSession
+```
+
+If included, the summary must be labeled as:
+
+```text
+untrusted read-only context summary
+not a prompting
+not a run
+not an edit
+not a system instruction
+```
+
+The summary may be stored as fork startup context or a native custom context entry tied to the new forkSession, for example:
+
+```json
+{
+  "type": "fork_context_summary",
+  "session_id": "fs_...",
+  "source": "ephemeral_inquiry",
+  "anchor": {
+    "type": "edit",
+    "id": "e_..."
+  },
+  "trusted": false,
+  "summary": "...",
+  "created_at": "..."
+}
+```
+
+If this summary is persisted in `.hutao` as part of the new forkSession and later committed, it may sync with the repository. The UI must say this clearly before persistence.
+
+### Git branch creation for forkSession
+
+Hutao forkSession and Git branch are related but not identical.
+
+```text
+Hutao forkSession = AI development context branch
+Git branch        = code isolation branch
+```
+
+Rules:
+
+```text
+1. Starting a normal conversation does not create a Git branch.
+2. Viewing prompting/edit details does not create a Git branch.
+3. Ephemeral read-only inquiry does not create a Git branch.
+4. Explicit fork / retry / continue-from-history creates a Hutao forkSession.
+5. Git branch creation should be optional and controlled by config.
+6. Default behavior should be ask, not silent automatic branch creation.
+```
+
+Recommended config:
+
+```text
+hutao.fork.gitBranch = ask
+hutao.fork.gitBranch = always
+hutao.fork.gitBranch = never
+```
+
+Default:
+
+```text
+ask
+```
+
+Recommended fork flow:
+
+```text
+1. User chooses Fork before/after/retry or promotes inquiry into forkSession.
+2. Hutao creates forkSession metadata and native conversation branch.
+3. Hutao asks whether to create a Git branch for code isolation, unless config says always/never.
+4. If creating a Git branch, require clean working tree or an explicit checkpoint/stash/cancel decision.
+5. If the fork target is not a plain commit state, preview materialization/apply-edits before changing code.
+6. New user work is written into the new forkSession.
+```
+
+Do not wait until after the first edit to create the optional Git branch. Once the user explicitly chooses a code-capable fork, branch isolation should be decided before new run/edit activity begins.
+
+### Required tests when implemented
+
+At minimum, add tests for:
+
+```text
+1. Selecting prompting node opens prompting detail/action menu.
+2. Selecting edit node opens edit detail/action menu.
+3. Detail menu selection does not create forkSession by itself.
+4. Read-only inquiry does not create prompting/run/edit/session facts.
+5. Read-only inquiry cannot call write tools.
+6. /back with discard does not write canonical .hutao facts.
+7. Local temporary draft does not enter .hutao/sessions facts.
+8. Promote-to-fork creates forkSession from the original anchor.
+9. Included inquiry summary is stored as untrusted read-only context, not prompting.
+10. Git branch creation is ask/always/never configurable and never triggered by read-only inquiry.
+```
+
 ## Priority update — extensible process tree first, real subagent runtime last
 
 The latest product direction is now:
