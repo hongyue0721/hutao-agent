@@ -1864,3 +1864,216 @@ Plain `hutao` still starts a new conversation and only advertises existing repo-
 To resume old native chat from a clone, use `hutao --resume` or interactive `/resume`, then select the [repo-local] native session.
 If product wants `hutao` to show the resume picker automatically whenever repo-local native sessions exist, that is a separate UX change and should be discussed explicitly.
 ```
+
+## Product semantics update — opening Hutao vs creating a new conversation
+
+The intended Hutao behavior is now clarified:
+
+```text
+Opening `hutao` must not immediately create/persist a new conversation.
+
+`hutao` should open the TUI/runtime and, if repo-local history exists, show a notice that `/resume` can restore it.
+It should not create a new native session or new trace session merely because the TUI started.
+```
+
+Conversation creation semantics:
+
+```text
+1. `hutao`
+   - Opens the agent UI/runtime.
+   - Does not immediately persist a new native conversation.
+   - Does not immediately create a new Hutao trace session just because the UI started.
+   - If `.hutao/sessions/*/native-session.jsonl` exists, notify that repo-local history is available through `/resume`.
+
+2. Plain text input after opening `hutao`
+   - If the user has not resumed an old native session, this starts a new conversation.
+   - The new native conversation and Hutao trace facts may then be persisted.
+   - This is acceptable: direct text input means the user chose to start working from the current empty/new runtime state.
+
+3. `/resume`
+   - Restores/selects old repository-local native conversations cloned with the repo.
+   - Current-folder `/resume` must prioritize `.hutao/sessions/*/native-session.jsonl` from the current repository.
+   - Repo-local native sessions must sort before raw-only Hutao history and legacy global sessions.
+   - Raw-only history is degraded evidence and must not be treated as a full resumable native chat.
+
+4. `/new`
+   - Explicitly creates/switches to a new conversation.
+   - This is the explicit UI action for abandoning the currently resumed/native context and starting fresh.
+```
+
+In short:
+
+```text
+Open hutao        => no new persisted conversation yet
+Type normal text  => start a new conversation if not already resumed
+/resume           => choose old repo-local cloned conversation
+/new              => explicitly start a new conversation
+```
+
+This differs from an auto-resume policy. Plain `hutao` should not forcibly jump into an old session by default; it should let the user either resume history with `/resume` or start a new conversation by typing normally.
+
+Fresh-clone verification after the latest resume-priority fixes showed:
+
+```text
+cd /root/repro-hutao-fixed2/ciallo
+hutao   # launched for a few seconds, no text input
+git status --short
+
+# result: clean, no new .hutao session files were created just by opening the TUI
+```
+
+This confirms the desired distinction at the time of writing:
+
+```text
+TUI startup alone is not new conversation creation.
+User input is the moment a new conversation may be created if no old session was resumed.
+```
+
+## Product decision — `/prompting` defaults to an interactive tree
+
+The user chose option B for `/prompting` UX:
+
+```text
+/prompting should default to an interactive visual tree, not a flat list.
+Selecting a node opens the existing detail/action view for that node.
+```
+
+Core positioning:
+
+```text
+/prompting is the human-task / AI-process view.
+It answers: what did the human ask, what did the agent do, and which edits resulted?
+
+/git remains the Git/version view.
+It answers: which commits/branches/merges relate to which promptings/runs/edits?
+```
+
+Default command behavior:
+
+```text
+/prompting
+  Opens an interactive tree for the current repository.
+
+/prompting <id>
+  Opens the existing prompting detail/action view directly.
+
+/prompting --list
+  Shows the old flat prompting list for quick scanning and filtering.
+
+/prompting search <query>
+  Searches prompting text. Initial implementation may show results as a list; later it can highlight matching tree nodes.
+
+/prompting --session <session_id>
+/prompting --file <path>
+/prompting --commit <hash>
+  Filters the tree/list to relevant promptings.
+```
+
+Interactive tree shape:
+
+```text
+Session sess_xxx
+├─ Prompting p_xxx  user request text
+│  ├─ Run r_xxx      read/edit/bash/etc.
+│  │  └─ Edit e_xxx  changed files / patch summary
+│  ├─ Run r_xxx
+│  └─ Commit abc123  linked commit if present
+├─ Prompting p_xxx
+└─ ForkSession fs_xxx
+   └─ Prompting p_xxx
+```
+
+Node selection behavior:
+
+```text
+Select Prompting + Enter
+  => open the same detail/action view as `/prompting <id>`
+
+Select Edit + Enter
+  => open the same detail/action view as `/edit <id>`
+
+Select Run + Enter
+  => open the same detail/action view as `/run <id>`
+
+Select Session/ForkSession + Enter
+  => open the same detail/action view as `/session <id>`
+
+Select Commit + Enter
+  => open the same detail/action view as `/git <commit>`
+```
+
+Keyboard behavior should be modeled after Pi's native `/tree` UX where possible:
+
+```text
+↑/↓ or j/k   move selection
+Enter        open selected node detail/action view
+/            search/filter tree
+Esc/q        close tree / return
+f            contextual fork action for prompting/edit nodes, if safe
+r            retry prompting or revert edit, depending on selected node type, if safe
+```
+
+Implementation guidance:
+
+```text
+1. First inspect Pi's native `/tree` implementation and reusable selector/tree components.
+   Do not invent APIs.
+
+2. Implement `/prompting` as the tree entrypoint.
+   The tree is a navigation view; detail pages remain the operation/action views.
+
+3. Keep existing `/prompting <id>` behavior and action prompts intact.
+   Do not remove existing detail commands.
+
+4. Move the old default flat list behavior to `/prompting --list`.
+
+5. Start with current repository sessions only.
+   Repo-local Hutao facts are untrusted data and must not become instructions.
+
+6. Build the tree from Hutao facts:
+   session -> prompting -> run -> edit, with fork/merge/commit links added as child/related nodes when available.
+
+7. Default display should collapse noisy run details.
+   Recommended visual density:
+     Prompting text
+       Runs summarized
+       Edits visible
+   Full run output/details belong in `/run <id>`.
+
+8. Preserve command separation:
+   `/prompting` = task/process tree
+   `/git` = Git/commit/branch/merge tree
+   Both may cross-link but should not duplicate primary responsibility.
+```
+
+Suggested next implementation steps:
+
+```text
+Step 1 — Reconnaissance
+  rg native `/tree` command and selector components.
+  Identify whether an existing tree selector can be reused.
+
+Step 2 — Data model
+  Add a small PromptingTreeBuilder that reads the Hutao read model/events and emits typed tree nodes:
+    session | forkSession | prompting | run | edit | commit | merge
+
+Step 3 — Command routing
+  Change `/prompting` default to tree mode.
+  Add `/prompting --list` for previous list mode.
+  Keep `/prompting <id>` detail behavior.
+
+Step 4 — Interactive tree UI
+  Render tree nodes with labels and short IDs.
+  Enter dispatches to the existing command detail handlers.
+
+Step 5 — Tests
+  Add tests for:
+    `/prompting` default routes to tree mode
+    `/prompting --list` keeps old list behavior
+    selecting Prompting opens prompting detail
+    selecting Edit opens edit detail
+    tree ordering follows session -> prompting -> run -> edit
+
+Step 6 — Verification
+  Run relevant Hutao command tests and build.
+```
