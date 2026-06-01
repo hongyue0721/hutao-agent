@@ -12,6 +12,7 @@ import { defaultHistoricalContinuationCoordinator } from "./historical-continuat
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
 import { MergeManager, type MergeMode } from "./merge-manager.ts";
+import { buildPromptingTreeNodes, renderPromptingTree } from "./prompting-tree.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
@@ -116,6 +117,23 @@ function relatedEditsForRun(events: HutaoEvent[], runId: unknown): HutaoEvent[] 
 	return events.filter((event) => event.type === "edit" && stringArray(event.produced_edit_ids).includes(value));
 }
 
+function isSubagentEvent(event: HutaoEvent): boolean {
+	return event.type === "subagent" || event.type === "subagent_started" || event.type === "subagent_finished";
+}
+
+function readSubagentEvents(events: HutaoEvent[]): HutaoEvent[] {
+	const subagentsById = new Map<string, HutaoEvent>();
+	for (const event of events.filter(isSubagentEvent)) {
+		const id = String(event.id ?? "");
+		if (!id) continue;
+		const existing = subagentsById.get(id);
+		if (!existing || event.type === "subagent_finished" || existing.type === "subagent_started") {
+			subagentsById.set(id, { ...existing, ...event });
+		}
+	}
+	return [...subagentsById.values()];
+}
+
 function editPatchPath(repoRoot: string, edit: HutaoEvent): string | undefined {
 	return typeof edit.patch === "string"
 		? join(repoRoot, ".hutao", "sessions", String(edit.session_id), edit.patch)
@@ -163,145 +181,6 @@ async function previewRevertEdit(
 	return ctx.ui.confirm("Hutao revert preview", `Apply reverse patch for edit ${edit.id}?`);
 }
 
-function renderPromptingTree(lines: string[], events: HutaoEvent[], promptings: HutaoEvent[]): void {
-	for (const prompting of promptings) {
-		lines.push(`├─ Prompting ${shortId(prompting.id)} ${eventTitle(prompting)}`);
-		const runs = events.filter((event) => event.type === "run_finished" && event.parent_prompting === prompting.id);
-		for (const run of runs) {
-			lines.push(`│  ├─ Run ${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? "unknown"}`);
-			for (const edit of relatedEditsForRun(events, run.id)) {
-				lines.push(`│  │  └─ Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ") || "no files"}`);
-			}
-		}
-		for (const edit of events.filter((event) => event.type === "edit" && event.parent_prompting === prompting.id)) {
-			if (!runs.some((run) => relatedEditsForRun(events, run.id).includes(edit))) {
-				lines.push(`│  └─ Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ") || "no files"}`);
-			}
-		}
-	}
-}
-
-type PromptingTreeNodeKind = "session" | "prompting" | "run" | "edit" | "commit" | "merge";
-
-interface PromptingTreeNode {
-	kind: PromptingTreeNodeKind;
-	id: string;
-	label: string;
-	depth: number;
-	event?: HutaoEvent;
-}
-
-function treePrefix(depth: number, isLast: boolean): string {
-	if (depth <= 0) return "";
-	return `${"│  ".repeat(Math.max(0, depth - 1))}${isLast ? "└─ " : "├─ "}`;
-}
-
-function pushPromptingTreeNode(
-	nodes: PromptingTreeNode[],
-	kind: PromptingTreeNodeKind,
-	id: string,
-	label: string,
-	depth: number,
-	event?: HutaoEvent,
-): void {
-	nodes.push({ kind, id, label, depth, event });
-}
-
-function buildPromptingTreeNodes(
-	repoRoot: string,
-	events: HutaoEvent[],
-	promptings: HutaoEvent[],
-): PromptingTreeNode[] {
-	const registry = new SessionRegistry(repoRoot);
-	const sessions = registry.readSessions();
-	const sessionIds = new Set(promptings.map((event) => String(event.session_id ?? "")));
-	const knownSessions = sessions.filter((session) => sessionIds.has(session.id));
-	const orphanSessionIds = [...sessionIds].filter((id) => id && !knownSessions.some((session) => session.id === id));
-	const sessionEntries = [
-		...knownSessions.map((session) => ({ id: session.id, kind: session.kind, status: session.status })),
-		...orphanSessionIds.map((id) => ({ id, kind: "session", status: "unknown" })),
-	];
-	const nodes: PromptingTreeNode[] = [];
-	for (const session of sessionEntries) {
-		const sessionPromptings = promptings.filter((event) => event.session_id === session.id);
-		if (sessionPromptings.length === 0) continue;
-		pushPromptingTreeNode(
-			nodes,
-			"session",
-			session.id,
-			`Session ${shortId(session.id)} ${session.kind} ${session.status} promptings=${sessionPromptings.length}`,
-			0,
-		);
-		for (const [promptingIndex, prompting] of sessionPromptings.entries()) {
-			const runsById = new Map<string, HutaoEvent>();
-			for (const event of events.filter(
-				(entry) =>
-					(entry.type === "run_finished" || entry.type === "run_started") &&
-					entry.parent_prompting === prompting.id,
-			)) {
-				const existing = runsById.get(String(event.id));
-				if (!existing || event.type === "run_finished") runsById.set(String(event.id), event);
-			}
-			const runs = [...runsById.values()];
-			const runIds = new Set(runs.map((run) => String(run.id)));
-			const edits = events.filter((event) => event.type === "edit" && event.parent_prompting === prompting.id);
-			const commits = relatedCommits(events, prompting.id, "prompting_ids");
-			const childCount =
-				runs.length + edits.filter((edit) => !runIds.has(String(edit.parent_run))).length + commits.length;
-			pushPromptingTreeNode(
-				nodes,
-				"prompting",
-				String(prompting.id),
-				`${treePrefix(1, promptingIndex === sessionPromptings.length - 1)}Prompting ${shortId(prompting.id)} ${eventTitle(prompting)}`,
-				1,
-				prompting,
-			);
-			let childIndex = 0;
-			for (const run of runs) {
-				const runEdits = relatedEditsForRun(events, run.id);
-				const runIsLast = childIndex === childCount - 1;
-				pushPromptingTreeNode(
-					nodes,
-					"run",
-					String(run.id),
-					`${treePrefix(2, runIsLast)}Run ${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? (run.type === "run_started" ? "started" : "unknown")} ${firstLine(run.input_summary ?? run.output_summary ?? "")}`,
-					2,
-					run,
-				);
-				childIndex += 1;
-				for (const [editIndex, edit] of runEdits.entries()) {
-					pushPromptingTreeNode(
-						nodes,
-						"edit",
-						String(edit.id),
-						`${treePrefix(3, editIndex === runEdits.length - 1)}Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ") || firstLine(edit.summary) || "no files"}`,
-						3,
-						edit,
-					);
-				}
-			}
-			for (const edit of edits.filter((entry) => !runIds.has(String(entry.parent_run)))) {
-				const isLast = childIndex === childCount - 1;
-				pushPromptingTreeNode(
-					nodes,
-					"edit",
-					String(edit.id),
-					`${treePrefix(2, isLast)}Edit ${shortId(edit.id)} ${stringArray(edit.files).join(", ") || firstLine(edit.summary) || "no files"}`,
-					2,
-					edit,
-				);
-				childIndex += 1;
-			}
-			for (const commit of commits) {
-				const isLast = childIndex === childCount - 1;
-				pushPromptingTreeNode(nodes, "commit", commit, `${treePrefix(2, isLast)}Commit ${commit.slice(0, 12)}`, 2);
-				childIndex += 1;
-			}
-		}
-	}
-	return nodes;
-}
-
 async function runPromptingTree(
 	repoRoot: string,
 	events: HutaoEvent[],
@@ -314,6 +193,7 @@ async function runPromptingTree(
 		return notify(ctx, "Hutao prompting", [promptings.length ? "No tree node selected." : "No promptings found."]);
 	if (selected.kind === "session") return sessionCommand(selected.id, ctx);
 	if (selected.kind === "prompting") return promptingCommand(selected.id, ctx);
+	if (selected.kind === "subagent") return subagentCommand(selected.id, ctx);
 	if (selected.kind === "run") return runCommand(selected.id, ctx);
 	if (selected.kind === "edit") return editCommand(selected.id, ctx);
 	if (selected.kind === "commit") return gitCommand(selected.id, ctx);
@@ -831,6 +711,63 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 		"",
 		"armed: next normal chat input will auto-fork after this prompting before it is recorded.",
 	]);
+}
+
+export async function subagentCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const repoRoot = await getRepoRoot(ctx);
+	if (!repoRoot) return notify(ctx, "Hutao subagent", ["Not in a Git repository."], "warning");
+	const events = readEvents(repoRoot);
+	let subagents = readSubagentEvents(events);
+	const query = args.trim();
+	const parts = query.split(/\s+/).filter(Boolean);
+	const sessionFilter = getFlagValue(parts, "--session");
+	const promptingFilter = getFlagValue(parts, "--prompting");
+	if (sessionFilter) subagents = subagents.filter((event) => String(event.session_id).startsWith(sessionFilter));
+	if (promptingFilter)
+		subagents = subagents.filter((event) => String(event.parent_prompting).startsWith(promptingFilter));
+	if (!query || query.startsWith("--")) {
+		const selected = await selectItem(
+			ctx,
+			"Select Hutao subagent",
+			subagents.slice(-40),
+			(event) =>
+				`${shortId(event.id)} ${event.name ?? event.role ?? "subagent"} ${event.status ?? (event.type === "subagent_started" ? "started" : "unknown")} ${firstLine(event.task ?? event.summary ?? "")}`,
+		);
+		if (!selected)
+			return notify(ctx, "Hutao subagent", [subagents.length ? "No subagent selected." : "No subagents found."]);
+		return subagentCommand(String(selected.id), ctx);
+	}
+	const subagent = subagents.find((event) => String(event.id).startsWith(query));
+	if (!subagent) return notify(ctx, "Hutao subagent", [`Not found: ${query}`], "warning");
+	const subagentId = String(subagent.id);
+	const runs = events.filter(
+		(event) =>
+			(event.type === "run_finished" || event.type === "run_started") && event.parent_subagent === subagentId,
+	);
+	const edits = events.filter((event) => event.type === "edit" && event.parent_subagent === subagentId);
+	const lines = [
+		`session: ${subagent.session_id ?? "unknown"}`,
+		`parent prompting: ${subagent.parent_prompting ?? "none"}`,
+		`name: ${subagent.name ?? "unknown"}`,
+		`role: ${subagent.role ?? "unknown"}`,
+		`status: ${subagent.status ?? (subagent.type === "subagent_started" ? "started" : "unknown")}`,
+		`started_at: ${subagent.started_at ?? subagent.created_at ?? "unknown"}`,
+		`ended_at: ${subagent.ended_at ?? "unknown"}`,
+		`task: ${firstLine(subagent.task ?? "")}`,
+		`summary: ${firstLine(subagent.summary ?? "")}`,
+		"",
+	];
+	pushEventList(
+		lines,
+		"Runs",
+		runs,
+		(run) =>
+			`${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? "started"} ${firstLine(run.output_summary ?? run.input_summary)}`,
+	);
+	pushEventList(lines, "Edits", edits, (edit) => `${shortId(edit.id)} ${stringArray(edit.files).join(",")}`);
+	lines.push("actions: /prompting <parent>, /run <id>, /edit <id>");
+	notify(ctx, `Subagent ${subagent.id}`, lines);
 }
 
 export async function runCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -1489,6 +1426,7 @@ export async function actionCommand(args: string, ctx: ExtensionCommandContext):
 		return runSessionAction(idPrefix, repoRoot, ctx);
 	}
 	if (kind === "run") return runCommand(idPrefix ?? "", ctx);
+	if (kind === "subagent") return subagentCommand(idPrefix ?? "", ctx);
 	if (kind === "git") return gitCommand(idPrefix ?? "", ctx);
 	if (kind === "fork") return forkCommand(idPrefix ?? "", ctx);
 	if (kind === "merge") return mergeCommand(idPrefix ? `session ${idPrefix}` : "session", ctx);

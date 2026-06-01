@@ -13,6 +13,7 @@ import {
 	promptingCommand,
 	runCommand,
 	sessionCommand,
+	subagentCommand,
 } from "../../src/hutao/commands.ts";
 import { CommitLinker } from "../../src/hutao/commit-linker.ts";
 import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoEvent } from "../../src/hutao/event-store.ts";
@@ -407,6 +408,58 @@ describe("Hutao integration safety", () => {
 
 		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
 		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
+	it("shows subagent records in the prompting tree and opens subagent details", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder } = await recordFileEdit(repo, "subagent-tree");
+		const sessionId = recorder.getSessionId();
+		const events = readSessionEvents(repo, sessionId);
+		const prompting = events.find((event) => event.type === "prompting");
+		expect(prompting?.id).toBeDefined();
+		const store = new EventStore(repo, sessionId);
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "subagent_started",
+			id: "sa_security",
+			session_id: sessionId,
+			parent_prompting: prompting?.id,
+			name: "security-reviewer",
+			role: "review",
+			task: "check auth flow",
+			status: "started",
+			created_at: new Date().toISOString(),
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "subagent_finished",
+			id: "sa_security",
+			session_id: sessionId,
+			parent_prompting: prompting?.id,
+			name: "security-reviewer",
+			role: "review",
+			task: "check auth flow",
+			summary: "No critical issues found.",
+			status: "completed",
+			ended_at: new Date().toISOString(),
+			created_at: new Date().toISOString(),
+		});
+
+		commandSelections.push("sa_security");
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-1)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain(
+			"Subagent sa_security security-reviewer completed",
+		);
+		expect(commandNotifications.at(-1)).toContain("Subagent sa_security");
+		expect(commandNotifications.at(-1)).toContain("security-reviewer");
+		expect(commandNotifications.at(-1)).toContain("No critical issues found");
+
+		await subagentCommand("sa_security", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Subagent sa_security");
+		expect(commandNotifications.at(-1)).toContain("parent prompting:");
 	});
 
 	it("keeps the old prompting picker behind --list", async () => {

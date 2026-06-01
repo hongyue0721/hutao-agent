@@ -12,7 +12,10 @@ export type HutaoEventType =
 	| "merge"
 	| "commit_link"
 	| "edit_reverted"
-	| "native_entry_link";
+	| "native_entry_link"
+	| "subagent"
+	| "subagent_started"
+	| "subagent_finished";
 
 export interface HutaoEventBase {
 	schema_version: string;

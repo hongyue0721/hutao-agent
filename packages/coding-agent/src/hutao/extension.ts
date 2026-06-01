@@ -17,6 +17,7 @@ import {
 	promptingCommand,
 	runCommand,
 	sessionCommand,
+	subagentCommand,
 } from "./commands.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
@@ -242,6 +243,7 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("fork", { description: "Create a Hutao forkSession", handler: forkCommand });
 	pi.registerCommand("merge", { description: "Preview or merge Hutao sessions", handler: mergeCommand });
 	pi.registerCommand("run", { description: "List or inspect Hutao runs", handler: runCommand });
+	pi.registerCommand("subagent", { description: "List or inspect Hutao subagents", handler: subagentCommand });
 	pi.registerCommand("action", { description: "Open Hutao action menus", handler: actionCommand });
 	pi.registerCommand("hutao", { description: "Open Hutao main menu", handler: actionCommand });
 	pi.registerCommand("language", { description: "Set Hutao menu language", handler: languageCommand });
