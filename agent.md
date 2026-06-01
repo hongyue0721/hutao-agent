@@ -2138,6 +2138,59 @@ The next work should not be:
 4. Automatic subagent triggering before there is a stable trace schema and relation layer.
 ```
 
+### Phase gate rule — tests must pass before moving on
+
+Architecture work must advance through tested slices.
+
+```text
+Only move to the next implementation step after the current step has passed its required tests.
+```
+
+This is a hard rule for process-tree, trace-relations, subagent domain, node contributors, and future subagent runtime work.
+
+Required behavior:
+
+```text
+1. Define the expected tests before or during each implementation slice.
+2. Run the relevant targeted tests after the slice is implemented.
+3. Run broader Hutao regression tests when the slice touches shared command/tree/trace behavior.
+4. Do not begin the next phase if required tests fail.
+5. If tests fail, fix the current slice first or explicitly revert/abandon it.
+6. Do not stack new architecture work on top of a failing test state.
+```
+
+Minimum test expectations by phase:
+
+```text
+Process tree architecture:
+  - process-tree builder/contributor unit tests
+  - /prompting integration tests
+  - /prompting --list regression test
+
+Trace relation layer:
+  - relation helper unit tests
+  - old trace compatibility tests
+  - command/tree regression tests that consume relations
+
+Subagent trace/read/view domain:
+  - subagent read-model tests
+  - /subagent list/detail tests
+  - /prompting tree subagent routing tests
+
+Additional node contributors:
+  - contributor-specific unit tests
+  - related command detail tests
+  - /prompting tree navigation regression tests
+
+Real subagent runtime, when it is eventually implemented:
+  - explicit launch tests
+  - trace linkage tests
+  - permission/confirmation tests
+  - no silent auto-trigger default tests
+```
+
+Documentation-only changes may use documentation review and `git diff --check`, but code or behavior changes must pass their relevant automated tests before the next step begins.
+
 ### Current target mental model
 
 `/prompting` should evolve from a prompting list/tree into Hutao's AI process tree:
