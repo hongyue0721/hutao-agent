@@ -12,6 +12,15 @@ import { defaultHistoricalContinuationCoordinator } from "./historical-continuat
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
 import { MergeManager, type MergeMode } from "./merge-manager.ts";
+import { defaultProcessActionRegistrations } from "./process-actions/default-actions.ts";
+import { HutaoProcessActionExecutor, processActionTargetFromNode } from "./process-actions/executor.ts";
+import { HutaoProcessActionRegistry } from "./process-actions/registry.ts";
+import type {
+	HutaoProcessAction,
+	HutaoProcessActionCommandHandlers,
+	HutaoProcessActionTarget,
+} from "./process-actions/types.ts";
+import type { HutaoProcessTreeNode } from "./process-tree/types.ts";
 import { buildPromptingTreeNodes, renderPromptingTree } from "./prompting-tree.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
@@ -29,6 +38,8 @@ import {
 	stringArray,
 } from "./trace-relations.ts";
 import { getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
+
+const defaultProcessActionRegistry = new HutaoProcessActionRegistry(defaultProcessActionRegistrations);
 
 function readEvents(repoRoot: string): HutaoEvent[] {
 	return readAllEvents(repoRoot);
@@ -145,13 +156,7 @@ async function runPromptingTree(
 	const selected = await selectItem(ctx, "Hutao prompting tree", nodes, (node) => node.label);
 	if (!selected)
 		return notify(ctx, "Hutao prompting", [promptings.length ? "No tree node selected." : "No promptings found."]);
-	if (selected.kind === "session") return sessionCommand(selected.id, ctx);
-	if (selected.kind === "prompting") return promptingCommand(selected.id, ctx);
-	if (selected.kind === "subagent") return subagentCommand(selected.id, ctx);
-	if (selected.kind === "run") return runCommand(selected.id, ctx);
-	if (selected.kind === "edit") return editCommand(selected.id, ctx);
-	if (selected.kind === "commit") return gitCommand(selected.id, ctx);
-	if (selected.kind === "merge") return mergeCommand(`session ${selected.id}`, ctx);
+	return runProcessNodeAction(selected, repoRoot, events, ctx);
 }
 
 function renderMergeLine(event: HutaoEvent): string {
@@ -414,6 +419,124 @@ async function confirmMergeOperation(
 	);
 }
 
+function makeProcessActionHandlers(
+	repoRoot: string,
+	events: HutaoEvent[],
+	ctx: ExtensionCommandContext,
+): HutaoProcessActionCommandHandlers {
+	return {
+		openSession: async (id) => sessionCommand(id, ctx),
+		openPrompting: async (id) => promptingCommand(id, ctx),
+		openSubagent: async (id) => subagentCommand(id, ctx),
+		openRun: async (id) => runCommand(id, ctx),
+		openEdit: async (id) => editCommand(id, ctx),
+		openCommit: async (id) => gitCommand(id, ctx),
+		openMerge: async (id) => mergeCommand(`session ${id}`, ctx),
+		viewPromptingEdits: async (promptingId) => editCommand(`--prompting ${promptingId}`, ctx),
+		viewPromptingRuns: async (promptingId) => {
+			const runs = events.filter(
+				(event) =>
+					(event.type === "run_finished" || event.type === "run_started") &&
+					event.parent_prompting === promptingId,
+			);
+			const lines = runs.length
+				? runs.map(
+					(run) =>
+						`${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? (run.type === "run_started" ? "started" : "unknown")} ${firstLine(run.output_summary ?? run.input_summary)}`,
+					)
+				: ["No related runs found."];
+			notify(ctx, `Runs for prompting ${promptingId}`, lines);
+		},
+		viewPromptingCommits: async (promptingId) => {
+			const commits = getCommitsForPrompting(events, promptingId);
+			notify(
+				ctx,
+				`Commits for prompting ${promptingId}`,
+				commits.length ? commits.map((commit) => commit.slice(0, 12)) : ["No related commits found."],
+			);
+		},
+		viewEditChangedFiles: async (editId) => {
+			const edit = findEvent(events, editId, "edit");
+			notify(ctx, `Changed files for edit ${editId}`, stringArray(edit?.files).length ? stringArray(edit?.files) : ["No changed files recorded."]);
+		},
+		viewEditParentRun: async (runId) => runCommand(runId, ctx),
+		viewEditRelations: async (editId) => {
+			const edit = findEvent(events, editId, "edit");
+			const commits = edit ? getCommitsForEdit(events, edit.id) : [];
+			const merges = edit ? getMergesForEdit(events, edit.id) : [];
+			const revertedBy = edit
+				? events.filter((event) => event.type === "edit_reverted" && event.edit_id === edit.id)
+				: [];
+			notify(ctx, `Relations for edit ${editId}`, [
+				`commits: ${commits.map((commit) => commit.slice(0, 12)).join(", ") || "none"}`,
+				`merges: ${merges.map((merge) => `${shortId(merge.id)}:${merge.mode}:${merge.status}`).join(", ") || "none"}`,
+				`reverted_by: ${revertedBy.map((event) => shortId(event.revert_edit_id)).join(", ") || "none"}`,
+			]);
+		},
+		resumePromptingAfter: async (prompting) => resumeFromPrompting(prompting, repoRoot, ctx),
+		resumeEditAfter: async (edit) => resumeFromEdit(edit, repoRoot, ctx),
+		forkPrompting: async (promptingId, mode) => forkCommand(`prompting ${promptingId} --${mode}`, ctx),
+		forkEdit: async (editId, mode) => forkCommand(`edit ${editId} --${mode}`, ctx),
+		previewRevertEdit: async (editId) => editCommand(`revert ${editId}`, ctx),
+		openReadOnlyInquiry: async (target) => {
+			notify(ctx, "Hutao read-only inquiry", [
+				`anchor: ${target.kind} ${target.id}`,
+				"Ephemeral read-only inquiry flow is not implemented yet.",
+				"No prompting/run/edit/session facts were created.",
+				"Next implementation step: EphemeralInquiryFlow state machine with read-only tool policy.",
+			]);
+		},
+		noAction: (title) => notify(ctx, title, [t(repoRoot, "menu.noAction")]),
+	};
+}
+
+async function runProcessActionTarget(
+	target: HutaoProcessActionTarget,
+	repoRoot: string,
+	events: HutaoEvent[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const node: HutaoProcessTreeNode = target.node ?? {
+		kind: target.kind,
+		id: target.id,
+		label: target.id,
+		depth: 0,
+		event: target.event,
+	};
+	const executor = new HutaoProcessActionExecutor({
+		repoRoot,
+		events,
+		ctx,
+		handlers: makeProcessActionHandlers(repoRoot, events, ctx),
+	});
+	const actions = defaultProcessActionRegistry.getActions(node, { repoRoot, events });
+	if (actions.length === 0) return executor.executeNodeDefault(node);
+	const titleKey = defaultProcessActionRegistry.getTitleKey(node);
+	const labels = actions.map((action) => t(repoRoot, action.labelKey));
+	const choice = await ctx.ui.select(titleKey ? t(repoRoot, titleKey) : `Hutao ${node.kind} actions`, labels);
+	const action = actions.find((candidate) => t(repoRoot, candidate.labelKey) === choice);
+	if (!action) return notify(ctx, `Hutao ${node.kind}`, [t(repoRoot, "menu.noAction")]);
+	return executor.execute(action, target);
+}
+
+async function runProcessNodeAction(
+	node: HutaoProcessTreeNode,
+	repoRoot: string,
+	events: HutaoEvent[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	return runProcessActionTarget(processActionTargetFromNode(node), repoRoot, events, ctx);
+}
+
+function eventTarget(kind: "prompting" | "edit", event: HutaoEvent): HutaoProcessActionTarget {
+	return {
+		kind,
+		id: String(event.id),
+		event,
+		node: { kind, id: String(event.id), label: `${kind} ${event.id}`, depth: 0, event },
+	};
+}
+
 async function runSessionAction(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
 	const choice = await selectAction(ctx, repoRoot, "session.action.title", [
 		{ id: "viewDetails", labelKey: "session.action.viewDetails" },
@@ -452,37 +575,11 @@ async function runPromptingAction(
 	repoRoot: string,
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
-	const choice = await selectAction(ctx, repoRoot, "prompting.action.title", [
-		{ id: "viewDetail", labelKey: "prompting.action.viewDetail" },
-		{ id: "resumeAfter", labelKey: "prompting.action.resumeAfter" },
-		{ id: "viewEdits", labelKey: "prompting.action.viewEdits" },
-		{ id: "forkBefore", labelKey: "prompting.action.forkBefore" },
-		{ id: "retry", labelKey: "prompting.action.retry" },
-		{ id: "forkAfter", labelKey: "prompting.action.forkAfter" },
-	]);
-	if (choice === "viewDetail") return promptingCommand(String(prompting.id), ctx);
-	if (choice === "resumeAfter") return resumeFromPrompting(prompting, repoRoot, ctx);
-	if (choice === "viewEdits") return editCommand(`--prompting ${prompting.id}`, ctx);
-	if (choice === "forkBefore") return forkCommand(`prompting ${prompting.id} --before`, ctx);
-	if (choice === "retry") return forkCommand(`prompting ${prompting.id} --retry`, ctx);
-	if (choice === "forkAfter") return forkCommand(`prompting ${prompting.id} --after`, ctx);
-	notify(ctx, "Hutao prompting", [t(repoRoot, "menu.noAction")]);
+	return runProcessActionTarget(eventTarget("prompting", prompting), repoRoot, readEvents(repoRoot), ctx);
 }
 
 async function runEditAction(edit: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
-	const choice = await selectAction(ctx, repoRoot, "edit.action.title", [
-		{ id: "viewPatch", labelKey: "edit.action.viewPatch" },
-		{ id: "viewParentPrompting", labelKey: "edit.action.viewParentPrompting" },
-		{ id: "continueAfter", labelKey: "edit.action.continueAfter" },
-		{ id: "tryBefore", labelKey: "edit.action.tryBefore" },
-		{ id: "previewRevert", labelKey: "edit.action.previewRevert" },
-	]);
-	if (choice === "viewPatch") return editCommand(String(edit.id), ctx);
-	if (choice === "viewParentPrompting") return promptingCommand(String(edit.parent_prompting), ctx);
-	if (choice === "continueAfter") return resumeFromEdit(edit, repoRoot, ctx);
-	if (choice === "tryBefore") return forkCommand(`edit ${edit.id} --before`, ctx);
-	if (choice === "previewRevert") return editCommand(`revert ${edit.id}`, ctx);
-	notify(ctx, "Hutao edit", [t(repoRoot, "menu.noAction")]);
+	return runProcessActionTarget(eventTarget("edit", edit), repoRoot, readEvents(repoRoot), ctx);
 }
 
 function readJsonlDiagnostics(path: string): { lines: number; corrupt: number } {

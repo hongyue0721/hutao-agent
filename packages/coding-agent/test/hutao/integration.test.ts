@@ -101,7 +101,8 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 				const requested = commandSelections.shift();
 				if (!requested) return options[0];
 				const aliases: Record<string, string[]> = {
-					"View Patch": ["View patch", "查看补丁"],
+					"View Patch": ["View patch", "查看补丁", "查看 patch"],
+					"View original input": ["View original input", "查看原始输入"],
 					"Preview context hydration": ["Preview context hydration", "预览上下文注入"],
 					"Queue hydration for next turn": ["Queue hydration for next turn", "排队注入到下一轮"],
 					"Resume this session": ["Resume this session", "继续此会话"],
@@ -392,20 +393,22 @@ describe("Hutao integration safety", () => {
 		const prompting = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting");
 		expect(prompting?.id).toBeDefined();
 
-		commandSelections.push(String(prompting?.id).slice(0, 20));
+		commandSelections.push(String(prompting?.id).slice(0, 20), "View original input");
 		await promptingCommand("", makeCommandContext(repo));
 
-		expect(commandSelectCalls.at(-1)?.title).toBe("Hutao prompting tree");
-		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Session sess_");
-		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Prompting p_");
-		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Run r_");
-		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain("Edit e_");
+		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Session sess_");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Prompting p_");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Run r_");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Edit e_");
+		expect(commandSelectCalls.at(-1)?.title).toContain("提示操作");
 		expect(commandNotifications.at(-1)).toContain(`Prompting ${prompting?.id}`);
 		expect(commandNotifications.at(-1)).toContain("change to tree-default");
 
-		commandSelections.push(editId.slice(0, 20));
+		commandSelections.push(editId.slice(0, 20), "View Patch");
 		await promptingCommand("", makeCommandContext(repo));
 
+		expect(commandSelectCalls.at(-1)?.title).toContain("修改操作");
 		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
 		expect(commandNotifications.at(-1)).toContain("file.txt");
 	});

@@ -34,6 +34,37 @@ git status -sb
 
 如果 `git status` 报 `not a git repository`，说明走错目录，必须立刻停止并切回真实仓库。
 
+### 0.1 架构推进原则：可迭代、可拓展优先
+
+本项目后续实现不追求“最小补丁式改动”。
+
+硬规则：
+
+```text
+不是最小改动。
+是面向未来的可迭代、可拓展架构改动。
+```
+
+实现时必须遵守：
+
+```text
+1. 不要为了快速接一个功能而在 commands.ts、prompting-tree.ts 或类似入口文件里继续堆 if/else 特判。
+2. 能抽成可复用 domain / registry / coordinator / policy / flow 的，就优先抽象成可增长模块。
+3. 菜单、slash command、历史节点 continuation、inquiry promote 等入口必须复用同一套底层 coordinator，不要各写一套业务流程。
+4. promptings / edits / runs / commits / merges / forks / future subagent / review / finding 节点都应朝统一 process tree/action registry 方向演进。
+5. Git branch 决策必须作为独立 GitBranchPolicy，而不是散落在 fork 菜单回调中。
+6. Ephemeral inquiry 必须作为显式状态机/flow，而不是临时菜单回调。
+7. 每次架构改动要能为后续新节点、新动作、新存储策略、新 UI 入口降低成本。
+```
+
+每次开工前要先问：
+
+```text
+这个改动是在扩大 Hutao 的可组合能力，还是只是在当前入口打补丁？
+```
+
+如果答案只是“打补丁”，需要停下来重新设计。
+
 你正在把 `earendil-works/pi` 魔改为一个新的 coding agent：
 
 ```text
