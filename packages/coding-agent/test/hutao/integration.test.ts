@@ -76,6 +76,8 @@ function readSessionEvents(repo: string, sessionId: string): HutaoEvent[] {
 }
 
 const commandSelections: string[] = [];
+const commandInputs: Array<string | undefined> = [];
+const commandUserMessages: Array<{ content: unknown; options?: unknown }> = [];
 const commandMessages: Array<{
 	message: { customType?: string; content?: unknown; display?: boolean; details?: unknown };
 	options?: unknown;
@@ -103,6 +105,13 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 				const aliases: Record<string, string[]> = {
 					"View Patch": ["View patch", "查看补丁", "查看 patch"],
 					"View original input": ["View original input", "查看原始输入"],
+					"Ask about this prompting in read-only mode": [
+						"Ask about this prompting in read-only mode",
+						"只读询问这个 prompting",
+					],
+					"Ask a read-only question": ["Ask a read-only question", "提出只读问题"],
+					"Promote to forkSession": ["Promote to forkSession", "提升为 forkSession"],
+					"Back without saving": ["Back without saving", "返回并不保存"],
 					"Preview context hydration": ["Preview context hydration", "预览上下文注入"],
 					"Queue hydration for next turn": ["Queue hydration for next turn", "排队注入到下一轮"],
 					"Resume this session": ["Resume this session", "继续此会话"],
@@ -124,12 +133,14 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 				const candidates = [requested, ...(aliases[requested] ?? [])];
 				return options.find((option) => candidates.some((candidate) => option.includes(candidate))) ?? requested;
 			},
-			input: async () => undefined,
+			input: async () => commandInputs.shift(),
 		},
 		sendMessage: vi.fn((message, options) => {
 			commandMessages.push({ message, options });
 		}),
-		sendUserMessage: vi.fn(),
+		sendUserMessage: vi.fn((content, options) => {
+			commandUserMessages.push({ content, options });
+		}),
 		appendEntry: vi.fn((customType, data) => {
 			commandAppendedEntries.push({ customType, data });
 		}),
@@ -146,6 +157,8 @@ const commandNotifications: string[] = [];
 afterEach(() => {
 	commandNotifications.length = 0;
 	commandSelections.length = 0;
+	commandInputs.length = 0;
+	commandUserMessages.length = 0;
 	commandMessages.length = 0;
 	commandAppendedEntries.length = 0;
 	commandSwitches.length = 0;
@@ -411,6 +424,41 @@ describe("Hutao integration safety", () => {
 		expect(commandSelectCalls.at(-1)?.title).toContain("修改操作");
 		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
 		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
+	it("runs read-only inquiry without creating canonical trace facts", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder } = await recordFileEdit(repo, "inquiry-target");
+		const eventsBefore = readSessionEvents(repo, recorder.getSessionId());
+		const prompting = eventsBefore.find((event) => event.type === "prompting");
+		expect(prompting?.id).toBeDefined();
+
+		commandSelections.push(
+			String(prompting?.id).slice(0, 20),
+			"Ask about this prompting in read-only mode",
+			"Ask a read-only question",
+		);
+		commandInputs.push("Why did this edit happen?");
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandMessages).toHaveLength(1);
+		expect(commandMessages[0].message.customType).toBe("hutao_ephemeral_read_only_inquiry");
+		expect(commandMessages[0].message.content).toContain("<hutao_ephemeral_read_only_inquiry>");
+		expect(commandMessages[0].message.content).toContain("Do not modify files, do not run tools");
+		expect(commandMessages[0].message.content).toContain("Why did this edit happen?");
+		expect(commandMessages[0].options).toEqual({ triggerTurn: true });
+		expect(commandMessages[0].message.details).toMatchObject({
+			type: "ephemeral_read_only_inquiry",
+			status: "read_only",
+			canonical_history: "not_written",
+			target: { kind: "prompting", id: prompting?.id },
+			question: "Why did this edit happen?",
+		});
+		expect(commandUserMessages).toHaveLength(0);
+		expect(commandAppendedEntries).toHaveLength(0);
+		expect(readSessionEvents(repo, recorder.getSessionId())).toHaveLength(eventsBefore.length);
+		expect(commandNotifications.at(-1)).toContain("canonical history: not written");
 	});
 
 	it("shows subagent records in the prompting tree and opens subagent details", async () => {

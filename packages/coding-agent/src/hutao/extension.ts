@@ -20,6 +20,7 @@ import {
 	subagentCommand,
 } from "./commands.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { defaultReadOnlyInquiryGuard } from "./ephemeral-inquiry/read-only-guard.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { SessionRegistry } from "./session-registry.ts";
@@ -187,6 +188,14 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
+		const inquiryLock = repoRoot ? defaultReadOnlyInquiryGuard.current(repoRoot) : undefined;
+		if (inquiryLock) {
+			return {
+				block: true,
+				reason: `Hutao read-only inquiry blocked tool call ${event.toolName}. Promote ${inquiryLock.targetKind} ${inquiryLock.targetId} to a forkSession before modifying or inspecting with tools.`,
+			};
+		}
 		const active = await getRecorder(ctx);
 		if (active) await active.recordToolCall(event.toolName, event.toolCallId, event.input);
 		const path = getPathInput(event);
@@ -228,6 +237,11 @@ export default function hutaoTraceExtension(pi: ExtensionAPI): void {
 		const active = await getRecorder(ctx);
 		if (!active) return;
 		await active.finishRun(event, ctx.cwd);
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		const repoRoot = await new GitAdapter(ctx.cwd).getRepoRoot();
+		if (repoRoot) defaultReadOnlyInquiryGuard.clear(repoRoot);
 	});
 
 	pi.on("session_before_fork", async (event, ctx) => {

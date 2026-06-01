@@ -6,6 +6,7 @@ import { buildConversationHydration } from "./conversation-hydrator.ts";
 import { renderConversationTimeline } from "./conversation-renderer.ts";
 import { ConversationStore } from "./conversation-store.ts";
 import type { HutaoEvent } from "./event-store.ts";
+import { EphemeralInquiryFlow } from "./ephemeral-inquiry/flow.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
@@ -478,14 +479,17 @@ function makeProcessActionHandlers(
 		forkPrompting: async (promptingId, mode) => forkCommand(`prompting ${promptingId} --${mode}`, ctx),
 		forkEdit: async (editId, mode) => forkCommand(`edit ${editId} --${mode}`, ctx),
 		previewRevertEdit: async (editId) => editCommand(`revert ${editId}`, ctx),
-		openReadOnlyInquiry: async (target) => {
-			notify(ctx, "Hutao read-only inquiry", [
-				`anchor: ${target.kind} ${target.id}`,
-				"Ephemeral read-only inquiry flow is not implemented yet.",
-				"No prompting/run/edit/session facts were created.",
-				"Next implementation step: EphemeralInquiryFlow state machine with read-only tool policy.",
-			]);
-		},
+		openReadOnlyInquiry: async (target) =>
+			new EphemeralInquiryFlow({
+				repoRoot,
+				ctx,
+				target,
+				events,
+				promotion: {
+					forkPrompting: async (promptingId, mode) => forkCommand(`prompting ${promptingId} --${mode}`, ctx),
+					forkEdit: async (editId, mode) => forkCommand(`edit ${editId} --${mode}`, ctx),
+				},
+			}).run(),
 		noAction: (title) => notify(ctx, title, [t(repoRoot, "menu.noAction")]),
 	};
 }
