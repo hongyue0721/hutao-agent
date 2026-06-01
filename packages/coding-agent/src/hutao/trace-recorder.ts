@@ -95,6 +95,7 @@ export class TraceRecorder {
 	private activePromptingId?: string;
 	private runs: Map<string, RunState>;
 	private toolCallRunIds: Map<string, string>;
+	private toolCallEditIds: Map<string, string[]>;
 	private nativeContextProvider?: NativeTraceContextProvider;
 
 	constructor(
@@ -111,6 +112,7 @@ export class TraceRecorder {
 		this.paths = new PathMapper(repoRoot);
 		this.runs = new Map();
 		this.toolCallRunIds = new Map();
+		this.toolCallEditIds = new Map();
 		this.nativeContextProvider = nativeContextProvider;
 	}
 
@@ -129,11 +131,40 @@ export class TraceRecorder {
 		};
 	}
 
+	private rememberToolCallEdit(toolCallId: string, editId: string): void {
+		const existing = this.toolCallEditIds.get(toolCallId) ?? [];
+		this.toolCallEditIds.set(toolCallId, uniqueStrings([...existing, editId]));
+	}
+
+	private appendNativeEditAnchorLink(editId: string, run: RunState): void {
+		const native = this.nativeContextProvider?.();
+		if (!native?.leafEntryId) return;
+		this.store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "native_entry_link",
+			id: createHutaoId("nel"),
+			session_id: this.sessionId,
+			related_prompting: this.activePromptingId,
+			related_run: run.id,
+			related_edit: editId,
+			related_edits: [editId],
+			tool_call_id: run.toolCallId,
+			tool_call_ids: [run.toolCallId],
+			native_session_id: native.sessionId,
+			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
+			native_entry_id: native.leafEntryId,
+			native_entry_type: "anchor",
+			native_anchor_relation: "current_leaf_after_edit_detected",
+			created_at: new Date().toISOString(),
+		});
+	}
+
 	async recordNativeEntryLink(entry: SessionEntry): Promise<void> {
 		const native = this.nativeContextProvider?.();
 		if (!native) return;
 		const toolCallIds = getNativeToolCallIds(entry);
 		const toolCallId = toolCallIds[0];
+		const relatedEdits = uniqueStrings(toolCallIds.flatMap((id) => this.toolCallEditIds.get(id) ?? []));
 		this.store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "native_entry_link",
@@ -141,6 +172,8 @@ export class TraceRecorder {
 			session_id: this.sessionId,
 			related_prompting: this.activePromptingId,
 			related_run: toolCallId ? this.toolCallRunIds.get(toolCallId) : undefined,
+			related_edit: relatedEdits[0],
+			related_edits: relatedEdits,
 			tool_call_id: toolCallId,
 			tool_call_ids: toolCallIds,
 			native_session_id: native.sessionId,
@@ -379,6 +412,8 @@ export class TraceRecorder {
 				status: "active",
 				summary: `${event.toolName} changed binary files ${files.join(", ")}`,
 			});
+			this.rememberToolCallEdit(run.toolCallId, id);
+			this.appendNativeEditAnchorLink(id, run);
 			return id;
 		}
 		const stored = this.patches.writePatch(id, sanitizedPatch);
@@ -403,6 +438,8 @@ export class TraceRecorder {
 			status: "active",
 			summary: `${event.toolName} changed ${files.join(", ")}`,
 		});
+		this.rememberToolCallEdit(run.toolCallId, id);
+		this.appendNativeEditAnchorLink(id, run);
 		return id;
 	}
 }

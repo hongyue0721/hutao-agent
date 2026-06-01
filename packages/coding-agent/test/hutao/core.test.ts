@@ -372,6 +372,20 @@ describe("ConversationStore", () => {
 		await recorder.recordNativeEntryLink(nativeSession.getEntry(toolResultEntryId)!);
 
 		const snapshot = new ConversationStore(repo).load(nativeSession.getSessionId());
+		const events = readTraceEvents(repo, nativeSession.getSessionId());
+		const edit = events.find((event) => event.type === "edit")!;
+		const directEditLinks = events.filter(
+			(event) => event.type === "native_entry_link" && event.related_edit === edit.id,
+		);
+		expect(directEditLinks.length).toBeGreaterThanOrEqual(1);
+		expect(directEditLinks.some((event) => event.native_entry_id === toolResultEntryId)).toBe(true);
+		const editForkTarget = new ForkTargetResolver(repo).resolve({
+			sourceType: "edit",
+			sourceIdPrefix: String(edit.id),
+			mode: "after",
+		});
+		expect(editForkTarget.ok).toBe(true);
+		expect(editForkTarget.targetNativeEntryId).toBe(toolResultEntryId);
 		expect(snapshot.status).toBe("complete");
 		expect(snapshot.items.map((item) => item.entry.id)).toContain(userEntryId);
 		const assistantItem = snapshot.items.find((item) => item.entry.id === assistantEntryId)!;

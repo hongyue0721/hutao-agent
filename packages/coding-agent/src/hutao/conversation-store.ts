@@ -89,6 +89,7 @@ function linksForEntry(entry: SessionEntry, events: HutaoEvent[]): ConversationT
 	]);
 	const editIds = unique([
 		...links.map((event) => stringValue(event.related_edit)),
+		...links.flatMap((event) => stringArray(event.related_edits)),
 		...events
 			.filter(
 				(event) =>
