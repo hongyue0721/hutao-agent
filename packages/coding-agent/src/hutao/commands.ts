@@ -16,16 +16,16 @@ import { buildPromptingTreeNodes, renderPromptingTree } from "./prompting-tree.t
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
+import { subagentCommand } from "./subagent/command.ts";
+export { subagentCommand };
+
 import {
 	getCommitLinkedIds,
 	getCommitsForEdit,
 	getCommitsForPrompting,
 	getCommitsForRun,
 	getEditsForRun,
-	getEditsForSubagent,
 	getMergesForEdit,
-	getRunsForSubagent,
-	getSubagents,
 	stringArray,
 } from "./trace-relations.ts";
 import { getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
@@ -665,60 +665,6 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 		"",
 		"armed: next normal chat input will auto-fork after this prompting before it is recorded.",
 	]);
-}
-
-export async function subagentCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
-	await ctx.waitForIdle();
-	const repoRoot = await getRepoRoot(ctx);
-	if (!repoRoot) return notify(ctx, "Hutao subagent", ["Not in a Git repository."], "warning");
-	const events = readEvents(repoRoot);
-	let subagents = getSubagents(events);
-	const query = args.trim();
-	const parts = query.split(/\s+/).filter(Boolean);
-	const sessionFilter = getFlagValue(parts, "--session");
-	const promptingFilter = getFlagValue(parts, "--prompting");
-	if (sessionFilter) subagents = subagents.filter((event) => String(event.session_id).startsWith(sessionFilter));
-	if (promptingFilter)
-		subagents = subagents.filter((event) => String(event.parent_prompting).startsWith(promptingFilter));
-	if (!query || query.startsWith("--")) {
-		const selected = await selectItem(
-			ctx,
-			"Select Hutao subagent",
-			subagents.slice(-40),
-			(event) =>
-				`${shortId(event.id)} ${event.name ?? event.role ?? "subagent"} ${event.status ?? (event.type === "subagent_started" ? "started" : "unknown")} ${firstLine(event.task ?? event.summary ?? "")}`,
-		);
-		if (!selected)
-			return notify(ctx, "Hutao subagent", [subagents.length ? "No subagent selected." : "No subagents found."]);
-		return subagentCommand(String(selected.id), ctx);
-	}
-	const subagent = subagents.find((event) => String(event.id).startsWith(query));
-	if (!subagent) return notify(ctx, "Hutao subagent", [`Not found: ${query}`], "warning");
-	const subagentId = String(subagent.id);
-	const runs = getRunsForSubagent(events, subagentId);
-	const edits = getEditsForSubagent(events, subagentId);
-	const lines = [
-		`session: ${subagent.session_id ?? "unknown"}`,
-		`parent prompting: ${subagent.parent_prompting ?? "none"}`,
-		`name: ${subagent.name ?? "unknown"}`,
-		`role: ${subagent.role ?? "unknown"}`,
-		`status: ${subagent.status ?? (subagent.type === "subagent_started" ? "started" : "unknown")}`,
-		`started_at: ${subagent.started_at ?? subagent.created_at ?? "unknown"}`,
-		`ended_at: ${subagent.ended_at ?? "unknown"}`,
-		`task: ${firstLine(subagent.task ?? "")}`,
-		`summary: ${firstLine(subagent.summary ?? "")}`,
-		"",
-	];
-	pushEventList(
-		lines,
-		"Runs",
-		runs,
-		(run) =>
-			`${shortId(run.id)} ${run.tool ?? "tool"} ${run.status ?? "started"} ${firstLine(run.output_summary ?? run.input_summary)}`,
-	);
-	pushEventList(lines, "Edits", edits, (edit) => `${shortId(edit.id)} ${stringArray(edit.files).join(",")}`);
-	lines.push("actions: /prompting <parent>, /run <id>, /edit <id>");
-	notify(ctx, `Subagent ${subagent.id}`, lines);
 }
 
 export async function runCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {

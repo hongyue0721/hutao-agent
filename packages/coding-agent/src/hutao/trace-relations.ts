@@ -1,24 +1,14 @@
 import type { HutaoEvent } from "./event-store.ts";
+import { getSubagentEvents } from "./subagent/read-model.ts";
 
 export function stringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-export function isSubagentEvent(event: HutaoEvent): boolean {
-	return event.type === "subagent" || event.type === "subagent_started" || event.type === "subagent_finished";
-}
+export { isSubagentEvent } from "./subagent/schema.ts";
 
 export function getSubagents(events: HutaoEvent[]): HutaoEvent[] {
-	const subagentsById = new Map<string, HutaoEvent>();
-	for (const event of events.filter(isSubagentEvent)) {
-		const id = String(event.id ?? "");
-		if (!id) continue;
-		const existing = subagentsById.get(id);
-		if (!existing || event.type === "subagent_finished" || existing.type === "subagent_started") {
-			subagentsById.set(id, { ...existing, ...event });
-		}
-	}
-	return [...subagentsById.values()];
+	return getSubagentEvents(events);
 }
 
 export function getPromptingsForSession(events: HutaoEvent[], sessionId: unknown): HutaoEvent[] {
