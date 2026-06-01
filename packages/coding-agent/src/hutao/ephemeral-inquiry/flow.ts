@@ -10,8 +10,8 @@ export const HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE = "hutao_ephemeral_read_only_in
 export type EphemeralInquiryExitAction = "ask" | "promoteFork" | "back";
 
 export interface EphemeralInquiryPromotionHandlers {
-	forkPrompting(promptingId: string, mode: "before" | "retry" | "after"): Promise<void>;
-	forkEdit(editId: string, mode: "before" | "after"): Promise<void>;
+	forkPrompting(promptingId: string, mode: "before" | "retry" | "after", followUpMessage?: string): Promise<void>;
+	forkEdit(editId: string, mode: "before" | "after", followUpMessage?: string): Promise<void>;
 }
 
 export interface EphemeralInquiryFlowOptions {
@@ -183,8 +183,13 @@ export class EphemeralInquiryFlow {
 	}
 
 	private async promoteToForkSession(): Promise<void> {
-		if (this.target.kind === "prompting") return this.promotion.forkPrompting(this.target.id, "after");
-		if (this.target.kind === "edit") return this.promotion.forkEdit(this.target.id, "after");
+		const followUpMessage = (await this.ctx.ui.input(t(this.repoRoot, "inquiry.input.promoteQuestion")))?.trim();
+		if (this.target.kind === "prompting") {
+			return this.promotion.forkPrompting(this.target.id, "after", followUpMessage || undefined);
+		}
+		if (this.target.kind === "edit") {
+			return this.promotion.forkEdit(this.target.id, "after", followUpMessage || undefined);
+		}
 		this.ctx.ui.notify(t(this.repoRoot, "inquiry.notice.cannotPromote"), "warning");
 	}
 }

@@ -357,31 +357,73 @@ async function runCoordinatedFork(
 	sourceId: string,
 	mode: "before" | "retry" | "after",
 	title = "Hutao fork",
+	options: { followUpMessage?: string; gitBranchPolicyMode?: GitBranchPolicyMode } = {},
 ): Promise<HutaoForkResult> {
+	let forkContext: ExtensionCommandContext | undefined;
 	const result = await new HutaoForkCoordinator(repoRoot, ctx).fork({
 		sourceType,
 		sourceIdPrefix: sourceId,
 		mode,
-		onCompleted: async (freshCtx, completed) => {
-			notify(freshCtx, title, [
-				`Created forkSession ${completed.sessionId}`,
-				`native branch: ${completed.nativeStatus ?? "unknown"}`,
-				completed.nativeSessionFile ? `native session: ${completed.nativeSessionFile}` : "native session: unknown",
-				completed.retryText
-					? "Retry text is available from the original prompting."
-					: "Continue chatting normally.",
-				"New promptings/runs/edits will be recorded in the forkSession.",
-			]);
-			if (completed.retryText && !freshCtx.ui.getEditorText().trim()) {
-				freshCtx.ui.setEditorText(completed.retryText);
-			}
+		onCompleted: async (freshCtx) => {
+			forkContext = freshCtx;
 		},
 	});
 	if (!result.ok) {
 		notify(ctx, title, [result.reason ?? "Fork failed."], "warning");
 		return result;
 	}
-	if (result.nativeStatus !== "created") {
+	if (result.sessionId) {
+		const branchResult = await new GitBranchPolicy().apply({
+			repoRoot,
+			ctx: forkContext ?? ctx,
+			modeOverride: options.gitBranchPolicyMode,
+			forkSessionId: result.sessionId,
+			sourceType,
+			sourceId,
+			forkMode: mode,
+		});
+		if (branchResult.action === "created") {
+			notify(forkContext ?? ctx, "Hutao Git branch", [
+				t(repoRoot, "gitBranch.notice.created"),
+				`branch: ${branchResult.branchName}`,
+				`forkSession: ${result.sessionId}`,
+			]);
+		} else if (branchResult.action === "failed") {
+			notify(
+				forkContext ?? ctx,
+				"Hutao Git branch",
+				[
+					t(repoRoot, "gitBranch.notice.failed"),
+					`branch: ${branchResult.branchName ?? "unknown"}`,
+					branchResult.reason ?? "unknown failure",
+				],
+				"warning",
+			);
+		} else if (branchResult.mode !== "never") {
+			notify(forkContext ?? ctx, "Hutao Git branch", [
+				t(repoRoot, "gitBranch.notice.skipped"),
+				branchResult.reason ?? "skipped",
+			]);
+		}
+	}
+	if (forkContext) {
+		notify(forkContext, title, [
+			`Created forkSession ${result.sessionId}`,
+			`native branch: ${result.nativeStatus ?? "unknown"}`,
+			result.nativeSessionFile ? `native session: ${result.nativeSessionFile}` : "native session: unknown",
+			options.followUpMessage
+				? "Follow-up message will be sent in the forkSession."
+				: result.retryText
+					? "Retry text is available from the original prompting."
+					: "Continue chatting normally.",
+			"New promptings/runs/edits will be recorded in the forkSession.",
+		]);
+		if (options.followUpMessage) {
+			await forkContext.sendUserMessage(options.followUpMessage);
+		} else if (result.retryText && !forkContext.ui.getEditorText().trim()) {
+			forkContext.ui.setEditorText(result.retryText);
+		}
+	} else if (result.nativeStatus !== "created") {
 		notify(
 			ctx,
 			title,
@@ -389,7 +431,9 @@ async function runCoordinatedFork(
 				`Created forkSession ${result.sessionId}`,
 				`native branch: ${result.nativeStatus ?? "degraded"}`,
 				result.degradedReason ?? "Native branch unavailable.",
-				"Continue chatting normally; Hutao trace will record new work in the forkSession.",
+				options.followUpMessage
+					? "Follow-up message was not sent because no fresh native fork context is available. Open the forkSession and resend it there."
+					: "Continue chatting normally; Hutao trace will record new work in the forkSession.",
 			],
 			"warning",
 		);
@@ -515,8 +559,16 @@ function makeProcessActionHandlers(
 				target,
 				events,
 				promotion: {
-					forkPrompting: async (promptingId, mode) => forkCommand(`prompting ${promptingId} --${mode}`, ctx),
-					forkEdit: async (editId, mode) => forkCommand(`edit ${editId} --${mode}`, ctx),
+					forkPrompting: async (promptingId, mode, followUpMessage) => {
+						await runCoordinatedFork(repoRoot, ctx, "prompting", promptingId, mode, "Hutao inquiry promotion", {
+							followUpMessage,
+						});
+					},
+					forkEdit: async (editId, mode, followUpMessage) => {
+						await runCoordinatedFork(repoRoot, ctx, "edit", editId, mode, "Hutao inquiry promotion", {
+							followUpMessage,
+						});
+					},
 				},
 			}).run(),
 		noAction: (title) => notify(ctx, title, [t(repoRoot, "menu.noAction")]),
@@ -1154,37 +1206,9 @@ export async function forkCommand(args: string, ctx: ExtensionCommandContext): P
 		return notify(ctx, "Hutao fork", [`Unsupported fork source: ${sourceType}`], "warning");
 	}
 	if (!sourceId) return notify(ctx, "Hutao fork", [t(repoRoot, "menu.cancelled")]);
-	const result = await runCoordinatedFork(repoRoot, ctx, sourceType, sourceId, mode, "Hutao fork");
-	if (!result.ok || !result.sessionId) return;
-	const branchResult = await new GitBranchPolicy().apply({
-		repoRoot,
-		ctx,
-		modeOverride: parsedArgs.mode,
-		forkSessionId: result.sessionId,
-		sourceType,
-		sourceId,
-		forkMode: mode,
+	await runCoordinatedFork(repoRoot, ctx, sourceType, sourceId, mode, "Hutao fork", {
+		gitBranchPolicyMode: parsedArgs.mode,
 	});
-	if (branchResult.action === "created") {
-		return notify(ctx, "Hutao Git branch", [
-			t(repoRoot, "gitBranch.notice.created"),
-			`branch: ${branchResult.branchName}`,
-			`forkSession: ${result.sessionId}`,
-		]);
-	}
-	if (branchResult.action === "failed") {
-		return notify(ctx, "Hutao Git branch", [
-			t(repoRoot, "gitBranch.notice.failed"),
-			`branch: ${branchResult.branchName ?? "unknown"}`,
-			branchResult.reason ?? "unknown failure",
-		], "warning");
-	}
-	if (branchResult.mode !== "never") {
-		return notify(ctx, "Hutao Git branch", [
-			t(repoRoot, "gitBranch.notice.skipped"),
-			branchResult.reason ?? "skipped",
-		]);
-	}
 }
 
 export async function mergeCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
