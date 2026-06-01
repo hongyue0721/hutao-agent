@@ -906,7 +906,12 @@ async function buildSessionInfosWithConcurrency(
 			})
 			.finally(() => {
 				inFlight.delete(task);
-				onLoaded();
+				try {
+					onLoaded();
+				} catch {
+					// Progress/render callbacks are observational. They must not make
+					// session discovery appear empty or failed.
+				}
 			});
 		inFlight.add(task);
 	};

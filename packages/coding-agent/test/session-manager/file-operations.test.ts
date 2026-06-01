@@ -378,6 +378,21 @@ describe("SessionManager repo-local Hutao native session directory", () => {
 		expect(clonedOnDisk).not.toContain(clonedRepo);
 	});
 
+	it("keeps repo-local resume sessions when progress callbacks fail", async () => {
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const session = SessionManager.create(repo, sessionDir);
+		appendRound(session, "progress callback should not hide me");
+		const sessionFile = session.getSessionFile()!;
+
+		const listed = await SessionManager.listForResume(repo, sessionDir, () => {
+			throw new Error("render progress failed");
+		});
+
+		expect(listed.map((entry) => entry.path)).toEqual([sessionFile]);
+		expect(listed[0]?.source).toBe("repo-local");
+		expect(listed[0]?.firstMessage).toBe("progress callback should not hide me");
+	});
+
 	it("forks repo-local native sessions into fs_ directories with repo-relative parent refs", async () => {
 		const sessionDir = getRepoLocalSessionDir(repo)!;
 		const session = SessionManager.create(repo, sessionDir);
