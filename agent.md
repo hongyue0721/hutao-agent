@@ -11,13 +11,13 @@
 The actual code repository for this task is:
 
 ```text
-D:/OneDrive/Desktop/hutao-agent.__tmp_inspect
+<repo-checkout>
 ```
 
 Important:
 
 ```text
-D:/OneDrive/Desktop/hutao-agent
+<workspace-placeholder>
 ```
 
 is currently not the full Git/code repository. It only contains project instruction files and must not be used as the target for code changes, tests, README rewrites, or Git operations.
@@ -25,7 +25,7 @@ is currently not the full Git/code repository. It only contains project instruct
 Before editing, testing, rewriting README, or running Git commands, always verify:
 
 ```bash
-cd /d/OneDrive/Desktop/hutao-agent.__tmp_inspect
+cd <repo-checkout>
 pwd
 git status -sb
 ```
@@ -52,7 +52,7 @@ Hutao should discover `.hutao/sessions/`, show available repo-local history, let
 
 ## Current implementation status
 
-Current completion level: foundational repo-local native resume is implemented, but full chat-level clone/resume/fork is not finished.
+Current completion level: repo-local native resume foundation and resume picker ordering are implemented and verified; explicit historical fork coordination and armed continuation are implemented. Full chat-level conversation reproduction, context hydration, and later subagent runtime are still unfinished.
 
 ### Done
 
@@ -64,9 +64,20 @@ Current completion level: foundational repo-local native resume is implemented, 
 5. Repo-local native session content sanitizes repo-root absolute paths to ${REPO} on disk.
 6. Opening repo-local native sessions hydrates ${REPO} back to the current clone path.
 7. resume/session listing has a repo-local-aware path via SessionManager.listForResume(...).
-8. startup --resume and interactive /resume are expected to use repo-local-aware listing.
+8. startup --resume and interactive /resume use repo-local-aware listing.
 9. Hutao trace recorder tries to align trace session id with the current native session id.
 10. Unit coverage exists for repo-local native session storage, fork file shape, path sanitization, hydration, and legacy/global compatibility.
+11. Repo-local native sessions are ordered ahead of raw-only Hutao history and legacy global sessions.
+12. The threaded resume picker preserves repo-local > raw-only > global source priority.
+13. Explicit /fork prompting/edit/commit commands use HutaoForkCoordinator.
+14. /prompting and /edit action-menu fork/resume entries reuse the same coordinator.
+15. Native branch and Hutao forkSession metadata share one coordinator-generated fs_<id> for explicit forks.
+16. Historical prompting/edit detail views can arm a transient continuation target without mutating old history.
+17. Armed normal interactive input is handled by HistoricalContinuationCoordinator before prompt persistence.
+18. Merge and revert commands append native custom trace entries while keeping .hutao events as the source of truth.
+19. Phase 1 process-tree architecture split is implemented.
+20. Phase 2 trace-relations helper layer is implemented.
+21. Phase 3 subagent trace/read/view domain extraction is implemented.
 ```
 
 ### Not done yet
@@ -74,14 +85,14 @@ Current completion level: foundational repo-local native resume is implemented, 
 Do not claim these are complete until implemented and verified:
 
 ```text
-1. Full Windows -> GitHub -> WSL clone/resume/continue end-to-end validation.
-2. resume picker UI clearly labeling repo-local vs global sessions.
-3. Full user-visible restoration of original chat UI after clone.
-4. Stable native entry <-> Hutao prompting/run/edit mapping.
-5. /prompting and /edit details creating native branch + Hutao forkSession when continuing from history.
-6. /fork prompting and /fork edit fully wired to native session tree.
-7. raw-only/degraded history UI.
-8. merge/revert native conversation entries tied to trace facts.
+1. Full chat-level conversation reproduction after clone, including readable user/assistant/tool timelines.
+2. Context hydration for resume/continue/fork-from-history, including preview and queue-for-next-turn UX.
+3. Stable, rebuildable native entry <-> Hutao prompting/run/edit/tool/diff mapping across all relevant entries.
+4. raw-only/degraded history UI that clearly distinguishes evidence-only history from resumable native chat.
+5. Productized plain `hutao` startup semantics: no new persisted conversation on open, plus clear /resume notice when repo-local history exists.
+6. Phase 4 process-tree contributors for forkSession/fork_session, merge, revert/conflict, and future plan/review/finding/checkpoint nodes.
+7. Full-history privacy controls, redaction, and export/share workflows.
+8. Real subagent runtime: /subagent run, spawn_subagent, isolated subagent context, scheduling, and explicit confirmation policies.
 ```
 
 ---
@@ -147,7 +158,8 @@ Parent refs inside repo-local native sessions must be repo-relative, for example
 Never store parent refs like:
 
 ```text
-D:\\repo\\.hutao\\sessions\\sess_<id>\\native-session.jsonl
+<repo>\.hutao\sessions\sess_<id>
+ative-session.jsonl
 /home/user/repo/.hutao/sessions/sess_<id>/native-session.jsonl
 ```
 
@@ -1242,7 +1254,7 @@ Observed workflow:
 ```text
 1. User created a project on server 152.42.205.229 in /root/test.
 2. The repo was pushed to https://github.com/hongyue0721/test-blog on branch master.
-3. The repo was cloned locally to D:/OneDrive/Desktop/blog-test/test-blog.
+3. The repo was cloned locally to <local-clone>.
 4. Local Hutao did not show a resumable repo-local native chat session.
 ```
 
@@ -1250,7 +1262,7 @@ Read-only verification performed from this repository:
 
 ```bash
 ssh root@152.42.205.229 'cd ~/test && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print'
-cd /d/OneDrive/Desktop/blog-test/test-blog && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print
+cd <local-clone> && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print
 hutao --version
 ```
 
@@ -1264,7 +1276,7 @@ Remote /root/test:
 - no .hutao/sessions/<id>/native-session.jsonl exists
 - working tree currently has M .hutao/manifest.json from later inspection/use
 
-Local D:/OneDrive/Desktop/blog-test/test-blog:
+Local <local-clone>:
 - branch master at 1100816 and tracking origin/master
 - same .hutao trace facts exist
 - no .hutao/sessions/<id>/native-session.jsonl exists
@@ -1324,7 +1336,7 @@ Observed workflow:
 ```text
 1. User created a project on server 152.42.205.229 in /root/test.
 2. The repo was pushed to https://github.com/hongyue0721/test-blog on branch master.
-3. The repo was cloned locally to D:/OneDrive/Desktop/blog-test/test-blog.
+3. The repo was cloned locally to <local-clone>.
 4. Local Hutao did not show a resumable repo-local native chat session.
 ```
 
@@ -1332,7 +1344,7 @@ Read-only verification performed from this repository:
 
 ```bash
 ssh root@152.42.205.229 'cd ~/test && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print'
-cd /d/OneDrive/Desktop/blog-test/test-blog && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print
+cd <local-clone> && git status -sb && git log --oneline -5 && find .hutao -maxdepth 4 -type f | sort && find .hutao/sessions -type f -name native-session.jsonl -print
 hutao --version
 ```
 
@@ -1346,7 +1358,7 @@ Remote /root/test:
 - no .hutao/sessions/<id>/native-session.jsonl exists
 - working tree currently has M .hutao/manifest.json from later inspection/use
 
-Local D:/OneDrive/Desktop/blog-test/test-blog:
+Local <local-clone>:
 - branch master at 1100816 and tracking origin/master
 - same .hutao trace facts exist
 - no .hutao/sessions/<id>/native-session.jsonl exists
@@ -1496,8 +1508,8 @@ Observed user verification:
 
 ```text
 Windows:
-- D:\OneDrive\Desktop\ciallo
-- D:\OneDrive\Desktop\checking\ciallo
+- <local-clone-a>
+- <local-clone-b>
 Both clones show repo-local resume correctly.
 
 Server 152.42.205.229:
@@ -2519,7 +2531,6 @@ forkSession / fork_session events
 merge events
 commit links
 revert/conflict state
-subagent records
 future plan/review/finding/checkpoint nodes
 ```
 
@@ -2530,6 +2541,27 @@ Rules:
 2. Each node family gets tests.
 3. Do not degrade /prompting tree navigation.
 4. Do not let historical trace text become instructions.
+5. Keep command and menu paths backed by shared implementation helpers.
+```
+
+Recommended order:
+
+```text
+1. merge contributor
+2. fork/forkSession contributor
+3. revert/conflict contributor
+4. richer commit-link display
+5. plan/review/finding/checkpoint schema stubs, only after concrete UX need exists
+```
+
+Required gate before each contributor is considered complete:
+
+```text
+1. contributor-specific unit tests
+2. related command/detail regression tests
+3. /prompting tree navigation regression tests
+4. core Hutao regression tests for touched behavior
+5. build/check pass for code changes
 ```
 
 ### Phase 5 — Real subagent runtime, last
@@ -2586,15 +2618,26 @@ Before using or adapting any external implementation:
 
 ### Immediate next implementation step
 
-The next coding step should be:
+The next coding step should be Phase 4 process-tree contributor work:
 
 ```text
-Refactor current prompting-tree.ts and subagent viewer work into:
+Add one contributor family at a time:
+  1. merge contributor
+  2. fork/forkSession contributor
+  3. revert/conflict contributor
+  4. richer commit-link display
+  5. future plan/review/finding/checkpoint schema only when there is a concrete UX need
+```
+
+This comes after the completed architecture slices:
+
+```text
+Done:
   process-tree/*
   trace-relations.ts
   subagent/*
+```
 
 Do this before implementing real subagent runtime.
-```
 
 Do not continue by adding more one-off conditionals to `commands.ts` or `prompting-tree.ts` unless it is a temporary migration step with tests.

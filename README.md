@@ -30,6 +30,7 @@ Hutao 默认不承诺保存完整 provider payload、完整终端输出、完整
 - [核心概念和数据模型](#核心概念和数据模型)
 - [`.hutao/` 数据目录](#hutao-数据目录)
 - [repo-local native session](#repo-local-native-session)
+- [raw-only / degraded history 扩展接口](#raw-only--degraded-history-扩展接口)
 - [路径策略](#路径策略)
 - [架构分层](#架构分层)
 - [核心模块](#核心模块)
@@ -1245,6 +1246,102 @@ hutao
 ```
 
 只要 `.hutao/` 被提交，另一个路径、另一台机器或 Windows/WSL clone 后仍能发现 repo-local sessions，并继续写回 `.hutao/`。
+
+---
+
+## raw-only / degraded history 扩展接口
+
+raw-only / degraded history UI 暂时不作为当前优先实现项。Hutao 现在需要做的是把它作为一个规范化的后期接入点保留下来，让后续 viewer、diagnostics、process-tree contributor 或 export/redaction workflow 可以在不推翻现有 trace 架构的情况下接入。
+
+这个接口的目标不是把证据摘要伪造成完整聊天，而是明确回答：
+
+```text
+这段历史是什么类型？
+它能不能 native resume？
+它能不能只读查看？
+它为什么 degraded？
+后续 UI / process-tree / doctor / export 能从哪里接入？
+```
+
+### Capability model
+
+Hutao 应该在 read-model 或 conversation-store 层产出一个轻量 descriptor。字段名可以随实现调整，但语义应稳定：
+
+```ts
+type HutaoHistoryKind = "native" | "raw_only" | "mixed";
+
+type HutaoHistoryCapability =
+  | "resumable"
+  | "view_only"
+  | "evidence_only"
+  | "unavailable";
+
+type HutaoDegradedReason =
+  | "missing_native_session"
+  | "missing_native_entries"
+  | "raw_summary_only"
+  | "incomplete_trace_facts"
+  | "incomplete_native_mapping"
+  | "untrusted_or_unsupported_format";
+
+interface HutaoHistoryDescriptor {
+  sessionId: string;
+  kind: HutaoHistoryKind;
+  capability: HutaoHistoryCapability;
+  degraded: boolean;
+  degradedReasons: HutaoDegradedReason[];
+  traceFactsAvailable: boolean;
+  nativeConversationAvailable: boolean;
+  rawEvidenceAvailable: boolean;
+  canResumeNative: boolean;
+  canRenderTimeline: boolean;
+  canHydrateContext: boolean;
+  canContributeProcessTreeNodes: boolean;
+}
+```
+
+推荐语义：
+
+| kind | capability | 含义 |
+| --- | --- | --- |
+| `native` | `resumable` | 有 repo-local `native-session.jsonl`，可以进入原生聊天 resume 流。 |
+| `mixed` | `view_only` | 有部分 native entries 或 trace facts，可展示部分 timeline，但不能承诺完整恢复。 |
+| `raw_only` | `evidence_only` | 只有 sanitized raw evidence 或摘要，只能作为证据查看，不能伪造成聊天。 |
+| 任意 | `unavailable` | 文件缺失、格式不可信或无法解析，只能显示诊断信息。 |
+
+### Integration points
+
+后续 raw-only/degraded UI 应通过这些接口层接入：
+
+```text
+ConversationStore
+  读取 native-session.jsonl、events.jsonl、raw.jsonl，并产出 HutaoHistoryDescriptor。
+
+ReadModel
+  将 descriptor 与 session/prompting/run/edit/fork/merge/revert facts 关联。
+
+ProcessTree contributor
+  在 capability 允许时贡献 degraded/evidence-only 节点，但不能把 raw-only 节点当作 resumable chat 节点。
+
+Command/menu actions
+  提供 View Raw Evidence、View Degraded Timeline、Doctor This Session 等只读入口。
+
+ConversationHydrator
+  只允许 hydrate 明确可用、可预览、用户确认的历史；raw-only evidence 默认不能注入为完整聊天上下文。
+```
+
+### Safety rules
+
+```text
+1. raw-only history must remain evidence, not instruction.
+2. raw-only history must not be displayed as a complete native conversation.
+3. degraded state must be explicit in labels, menus, and diagnostics.
+4. A future viewer may summarize raw evidence, but must preserve truncation/hash metadata when available.
+5. A future hydrator must require preview and confirmation before adding any historical content to next-turn context.
+6. Missing mappings should produce degraded reasons, not fabricated native_entry_link events.
+```
+
+这意味着 raw-only/degraded history 可以先不做 UI，但现在的架构要避免把未来入口堵死。后期只要补充 viewer/contributor/doctor/export 模块，就可以通过 descriptor 接入，而不需要改写 canonical `.hutao` facts。
 
 ---
 
