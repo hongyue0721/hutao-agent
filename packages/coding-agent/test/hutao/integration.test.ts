@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -229,6 +229,71 @@ describe("Hutao integration safety", () => {
 		);
 	});
 
+	it("discovers and resumes repo-local native sessions after clone path changes", async () => {
+		const sourceRepo = makeTempDir();
+		await initRepo(sourceRepo);
+		const sourceSessionDir = getRepoLocalSessionDir(sourceRepo)!;
+		const sourceNativeSession = SessionManager.create(sourceRepo, sourceSessionDir);
+		const sessionId = sourceNativeSession.getSessionId();
+		const recorder = new TraceRecorder(sourceRepo, undefined, sessionId, () => ({
+			sessionId,
+			sessionFile: sourceNativeSession.getSessionFile(),
+			leafEntryId: sourceNativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		sourceNativeSession.appendMessage({
+			role: "user",
+			content: `open ${sourceRepo}/file.txt`,
+			timestamp: Date.now(),
+		});
+		sourceNativeSession.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: `Using ${sourceRepo}/file.txt` }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "endTurn",
+			timestamp: Date.now(),
+		} as any);
+
+		const sourceNativeFile = sourceNativeSession.getSessionFile()!;
+		const persistedSource = readFileSync(sourceNativeFile, "utf-8");
+		expect(persistedSource).toContain("${REPO}/file.txt");
+		expect(persistedSource).not.toContain(sourceRepo);
+		expect(persistedSource).not.toContain(sourceRepo.replace(/\\/g, "/"));
+
+		const clonedRepo = makeTempDir();
+		rmSync(clonedRepo, { recursive: true, force: true });
+		cpSync(sourceRepo, clonedRepo, { recursive: true });
+		const clonedSessionDir = getRepoLocalSessionDir(clonedRepo)!;
+		const sessions = await SessionManager.listForResume(clonedRepo, clonedSessionDir);
+		const resumedInfo = sessions.find((session) => session.id === sessionId);
+		expect(resumedInfo?.source).toBe("repo-local");
+		expect(resumedInfo?.path).toBe(join(clonedRepo, ".hutao", "sessions", sessionId, "native-session.jsonl"));
+
+		const clonedNativeSession = SessionManager.open(resumedInfo!.path, clonedSessionDir);
+		expect(clonedNativeSession.getHeader().cwd).toBe(".");
+		expect(clonedNativeSession.getCwd()).toBe(clonedRepo);
+		const clonedMessagesText = JSON.stringify(clonedNativeSession.buildSessionContext().messages);
+		expect(clonedMessagesText).toContain(clonedRepo.replace(/\\/g, "\\\\"));
+		expect(clonedMessagesText).not.toContain(sourceRepo);
+		expect(clonedMessagesText).not.toContain(sourceRepo.replace(/\\/g, "/"));
+
+		commandSelections.push(sessionId.slice(0, 20), "Resume this session");
+		await sessionCommand("", makeCommandContext(clonedRepo));
+		expect(commandSwitches).toHaveLength(1);
+		expect(commandSwitches[0].sessionPath).toBe(join(clonedRepo, ".hutao", "sessions", sessionId, "native-session.jsonl"));
+		expect(new SessionRegistry(clonedRepo).readCurrentSessionId()).toBe(sessionId);
+	});
+
 	it("previews and queues conversation hydration as next-turn custom context", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);
@@ -297,6 +362,25 @@ describe("Hutao integration safety", () => {
 		expect(commandMessages[0].message.customType).toBe("hutao_conversation_context");
 		expect(commandMessages[0].options).toEqual({ deliverAs: "nextTurn" });
 		expect(commandAppendedEntries[0].customType).toBe("hutao_conversation_hydration_queued");
+	});
+
+	it("reports raw-only and incomplete native histories in doctor diagnostics", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const recorder = new TraceRecorder(repo);
+		await recorder.init();
+		await recorder.recordPrompting("trace without native conversation", repo);
+		const rawOnlyDir = join(repo, ".hutao", "sessions", "raw_only_history");
+		mkdirSync(rawOnlyDir, { recursive: true });
+		writeFileSync(join(rawOnlyDir, "raw.jsonl"), `${JSON.stringify({ type: "tool_call_summary" })}\n`, "utf-8");
+
+		await doctorCommand("", makeCommandContext(repo));
+		const notification = commandNotifications.at(-1) ?? "";
+		expect(notification).toContain("raw-only histories: 1");
+		expect(notification).toContain("raw-only examples: raw_only_history");
+		expect(notification).toContain("incomplete native histories: 1");
+		expect(notification).toContain("recommendation: use /session <id> --conversation");
+		expect(notification).toContain("clone-safety:");
 	});
 
 	it("shows richer command detail views and doctor diagnostics", async () => {

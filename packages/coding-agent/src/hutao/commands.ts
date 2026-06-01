@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
 import { CommitLinker } from "./commit-linker.ts";
 import { buildConversationHydration } from "./conversation-hydrator.ts";
 import { renderConversationTimeline } from "./conversation-renderer.ts";
 import { ConversationStore } from "./conversation-store.ts";
+import { collectHutaoDoctorDiagnostics } from "./doctor-diagnostics.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { EphemeralInquiryFlow } from "./ephemeral-inquiry/flow.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
@@ -665,22 +666,6 @@ async function runPromptingAction(
 
 async function runEditAction(edit: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
 	return runProcessActionTarget(eventTarget("edit", edit), repoRoot, readEvents(repoRoot), ctx);
-}
-
-function readJsonlDiagnostics(path: string): { lines: number; corrupt: number } {
-	if (!existsSync(path)) return { lines: 0, corrupt: 0 };
-	let lines = 0;
-	let corrupt = 0;
-	for (const line of readFileSync(path, "utf-8").split(/\r?\n/)) {
-		if (!line.trim()) continue;
-		lines += 1;
-		try {
-			JSON.parse(line);
-		} catch {
-			corrupt += 1;
-		}
-	}
-	return { lines, corrupt };
 }
 
 export async function sessionCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -1523,33 +1508,14 @@ export async function doctorCommand(args: string, ctx: ExtensionCommandContext):
 	if (!repoRoot) return notify(ctx, "Hutao doctor", ["Not in a Git repository."], "warning");
 	if (args.trim() === "rebuild" || args.trim() === "--rebuild") rebuildIndex(repoRoot);
 	const hutaoDir = join(repoRoot, ".hutao");
-	const sessionsDir = join(hutaoDir, "sessions");
 	const sessions = new SessionRegistry(repoRoot).readSessions();
 	const events = readEvents(repoRoot);
-	let corruptJsonl = 0;
-	let jsonlLines = 0;
-	if (existsSync(sessionsDir)) {
-		for (const session of readdirSync(sessionsDir)) {
-			const diagnostics = readJsonlDiagnostics(join(sessionsDir, session, "events.jsonl"));
-			jsonlLines += diagnostics.lines;
-			corruptJsonl += diagnostics.corrupt;
-		}
-	}
 	const manifestPath = join(hutaoDir, "manifest.json");
 	const manifestText = existsSync(manifestPath) ? readFileSync(manifestPath, "utf-8") : "";
-	const traceText = existsSync(sessionsDir)
-		? readdirSync(sessionsDir)
-				.map((session) => {
-					const eventsPath = join(sessionsDir, session, "events.jsonl");
-					return existsSync(eventsPath) ? readFileSync(eventsPath, "utf-8") : "";
-				})
-				.join("\n")
-		: "";
-	const absoluteRepoLeak = traceText.includes(repoRoot.replace(/\\/g, "/")) || traceText.includes(repoRoot);
-	const protectedTextLeak = /(?:sk-[A-Za-z0-9_-]{20,}|BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY)/.test(traceText);
 	const piExtensions = existsSync(join(repoRoot, ".pi", "extensions"));
 	const remote = await new GitAdapter(repoRoot).run(["remote", "get-url", "origin"]);
 	const traceStatus = await getHutaoTraceStatus(repoRoot);
+	const doctorDiagnostics = collectHutaoDoctorDiagnostics(repoRoot, sessions);
 	const traceStatusLines = traceStatus.exists
 		? [
 				"canonical trace status:",
@@ -1579,22 +1545,13 @@ export async function doctorCommand(args: string, ctx: ExtensionCommandContext):
 		`sessions: ${sessions.length}`,
 		`events: ${events.length}`,
 		...traceStatusLines,
-		`jsonl lines: ${jsonlLines}`,
-		`corrupt jsonl lines: ${corruptJsonl}`,
-		`absolute repo path leak: ${absoluteRepoLeak ? "found" : "none"}`,
-		`secret-looking trace leak: ${protectedTextLeak ? "found" : "none"}`,
+		...doctorDiagnostics.lines,
 		`.pi/extensions present: ${piExtensions ? "yes - review before trusting third-party repo extensions" : "no"}`,
 	];
 	notify(
 		ctx,
 		"Hutao doctor",
 		lines,
-		corruptJsonl ||
-			absoluteRepoLeak ||
-			protectedTextLeak ||
-			traceStatus.unstaged.length ||
-			traceStatus.untracked.length
-			? "warning"
-			: "info",
+		doctorDiagnostics.hasWarnings || traceStatus.unstaged.length || traceStatus.untracked.length ? "warning" : "info",
 	);
 }
