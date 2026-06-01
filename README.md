@@ -466,17 +466,27 @@ npm run test      # 运行 workspace 测试
 
 ### 本地全局安装
 
+可以直接下载当前打好的 npm tarball：
+
+[hutao-agent-0.77.0.tgz](https://github.com/hongyue0721/hutao-agent/raw/main/hutao-agent-0.77.0.tgz)
+
+下载后在包文件所在目录安装：
+
+```bash
+npm install -g --ignore-scripts ./hutao-agent-0.77.0.tgz
+```
+
 如果已经有打包产物：
 
 ```bash
-npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
+npm install -g --ignore-scripts ./hutao-agent-0.77.0.tgz
 ```
 
 或者重新打包再安装：
 
 ```bash
 npm pack --workspace packages/coding-agent
-npm install -g --ignore-scripts ./packages/coding-agent/hutao-agent-0.77.0.tgz
+npm install -g --ignore-scripts ./hutao-agent-0.77.0.tgz
 ```
 
 验证：
