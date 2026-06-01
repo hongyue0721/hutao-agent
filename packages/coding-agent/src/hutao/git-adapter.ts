@@ -211,6 +211,15 @@ export class GitAdapter {
 		return result.ok;
 	}
 
+	async createAndSwitchBranch(branchName: string): Promise<GitCommandResult> {
+		return this.run(["switch", "-c", branchName]);
+	}
+
+	async getCurrentBranch(): Promise<string | undefined> {
+		const result = await this.run(["branch", "--show-current"]);
+		return result.ok ? result.stdout.trim() || undefined : undefined;
+	}
+
 	async getFileHashes(paths: string[]): Promise<FileHashEntry[]> {
 		const entries: FileHashEntry[] = [];
 		for (const path of paths) {

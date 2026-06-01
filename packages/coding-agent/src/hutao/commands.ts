@@ -9,6 +9,7 @@ import type { HutaoEvent } from "./event-store.ts";
 import { EphemeralInquiryFlow } from "./ephemeral-inquiry/flow.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { GitBranchPolicy, parseGitBranchPolicyMode, type GitBranchPolicyMode } from "./git-branch-policy.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
@@ -76,6 +77,34 @@ function findEvent(events: HutaoEvent[], idPrefix: string, type?: string): Hutao
 function getFlagValue(parts: string[], flag: string): string | undefined {
 	const index = parts.indexOf(flag);
 	return index === -1 ? undefined : parts[index + 1];
+}
+
+function extractGitBranchPolicyMode(
+	parts: string[],
+): { parts: string[]; mode?: GitBranchPolicyMode; invalid?: string } {
+	const next: string[] = [];
+	let mode: GitBranchPolicyMode | undefined;
+	let invalid: string | undefined;
+	for (let index = 0; index < parts.length; index += 1) {
+		const part = parts[index];
+		if (part === "--git-branch") {
+			const value = parts[index + 1];
+			const parsed = parseGitBranchPolicyMode(value);
+			if (parsed) mode = parsed;
+			else invalid = value ?? "";
+			index += 1;
+			continue;
+		}
+		if (part.startsWith("--git-branch=")) {
+			const value = part.slice("--git-branch=".length);
+			const parsed = parseGitBranchPolicyMode(value);
+			if (parsed) mode = parsed;
+			else invalid = value;
+			continue;
+		}
+		next.push(part);
+	}
+	return { parts: next, mode, invalid };
 }
 
 function eventText(event: HutaoEvent): string {
@@ -1067,7 +1096,11 @@ export async function forkCommand(args: string, ctx: ExtensionCommandContext): P
 	const repoRoot = await getRepoRoot(ctx);
 	if (!repoRoot) return notify(ctx, "Hutao fork", ["Not in a Git repository."], "warning");
 	const events = readEvents(repoRoot);
-	const parts = args.trim().split(/\s+/).filter(Boolean);
+	const parsedArgs = extractGitBranchPolicyMode(args.trim().split(/\s+/).filter(Boolean));
+	if (parsedArgs.invalid !== undefined) {
+		return notify(ctx, "Hutao fork", [`Unsupported --git-branch mode: ${parsedArgs.invalid || "<missing>"}`], "warning");
+	}
+	const parts = parsedArgs.parts;
 	let sourceType = parts[0] as "prompting" | "edit" | "commit" | undefined;
 	let sourceId: string | undefined = parts[1];
 	let modeFlag = parts[2] ?? "--after";
@@ -1122,9 +1155,36 @@ export async function forkCommand(args: string, ctx: ExtensionCommandContext): P
 	}
 	if (!sourceId) return notify(ctx, "Hutao fork", [t(repoRoot, "menu.cancelled")]);
 	const result = await runCoordinatedFork(repoRoot, ctx, sourceType, sourceId, mode, "Hutao fork");
-	if (!result.ok) return;
-	if (result.nativeStatus === "created") return;
-	return;
+	if (!result.ok || !result.sessionId) return;
+	const branchResult = await new GitBranchPolicy().apply({
+		repoRoot,
+		ctx,
+		modeOverride: parsedArgs.mode,
+		forkSessionId: result.sessionId,
+		sourceType,
+		sourceId,
+		forkMode: mode,
+	});
+	if (branchResult.action === "created") {
+		return notify(ctx, "Hutao Git branch", [
+			t(repoRoot, "gitBranch.notice.created"),
+			`branch: ${branchResult.branchName}`,
+			`forkSession: ${result.sessionId}`,
+		]);
+	}
+	if (branchResult.action === "failed") {
+		return notify(ctx, "Hutao Git branch", [
+			t(repoRoot, "gitBranch.notice.failed"),
+			`branch: ${branchResult.branchName ?? "unknown"}`,
+			branchResult.reason ?? "unknown failure",
+		], "warning");
+	}
+	if (branchResult.mode !== "never") {
+		return notify(ctx, "Hutao Git branch", [
+			t(repoRoot, "gitBranch.notice.skipped"),
+			branchResult.reason ?? "skipped",
+		]);
+	}
 }
 
 export async function mergeCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
