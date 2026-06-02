@@ -14,6 +14,12 @@ import { GitAdapter } from "../../src/hutao/git-adapter.ts";
 import { HistoricalContinuationCoordinator } from "../../src/hutao/historical-continuation-coordinator.ts";
 import { HutaoIgnore } from "../../src/hutao/hutao-ignore.ts";
 import { rebuildIndex } from "../../src/hutao/index-builder.ts";
+import {
+	mirrorNativeSessionEntry,
+	mirrorNativeSessionSnapshot,
+	readMirroredNativeSession,
+	snapshotFromSessionManager,
+} from "../../src/hutao/native-session-mirror.ts";
 import { PathMapper } from "../../src/hutao/path-mapper.ts";
 import { RevertManager } from "../../src/hutao/revert-manager.ts";
 import { isProtectedRepoPath, sanitizeText } from "../../src/hutao/secret-guard.ts";
@@ -50,6 +56,63 @@ afterEach(() => {
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+describe("NativeSessionMirror", () => {
+	it("mirrors global native sessions into repo-local Hutao session directories", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const globalSessionDir = join(makeTempDir(), "global-sessions");
+		mkdirSync(globalSessionDir, { recursive: true });
+		const nativeSession = SessionManager.create(repo, globalSessionDir, { id: "global-native-id" });
+		const firstEntryId = nativeSession.appendMessage({
+			role: "user",
+			content: `open ${join(repo, "src", "secret.ts")} with token ghp_${"x".repeat(36)}`,
+			timestamp: Date.now(),
+		});
+		const traceSessionId = "sess_trace_mirror";
+
+		const mirroredPath = mirrorNativeSessionSnapshot(snapshotFromSessionManager(repo, traceSessionId, nativeSession));
+		expect(mirroredPath).toBe(join(repo, ".hutao", "sessions", traceSessionId, "native-session.jsonl"));
+		let mirrored = readMirroredNativeSession(repo, traceSessionId);
+		expect(mirrored[0]).toMatchObject({ type: "session", id: traceSessionId, cwd: "." });
+		expect(JSON.stringify(mirrored)).toContain(`${"$"}{REPO}/src/secret.ts`);
+		expect(JSON.stringify(mirrored)).toContain("[secret-redacted]");
+		expect(JSON.stringify(mirrored)).not.toContain("ghp_");
+		expect(JSON.stringify(mirrored)).not.toContain(repo.replace(/\\/g, "\\\\"));
+		expect(mirrored.filter((entry) => entry.type !== "session")).toHaveLength(1);
+		expect((mirrored[1] as { id?: string }).id).toBe(firstEntryId);
+
+		const secondEntryId = nativeSession.appendMessage({
+			role: "assistant",
+			content: "done",
+			timestamp: Date.now(),
+		});
+		const secondEntry = nativeSession.getEntry(secondEntryId)!;
+		mirrorNativeSessionEntry(snapshotFromSessionManager(repo, traceSessionId, nativeSession), secondEntry);
+		mirrorNativeSessionEntry(snapshotFromSessionManager(repo, traceSessionId, nativeSession), secondEntry);
+		mirrored = readMirroredNativeSession(repo, traceSessionId);
+		expect(mirrored.filter((entry) => entry.type !== "session")).toHaveLength(2);
+		expect(
+			mirrored
+				.filter((entry) => entry.type !== "session")
+				.map((entry) => (entry as { id?: string }).id)
+				.filter(Boolean),
+		).toEqual([firstEntryId, secondEntryId]);
+	});
+
+	it("does not mirror sessions that are already repo-local", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir, { id: "sess_repo_local" });
+		nativeSession.appendMessage({ role: "user", content: "repo local", timestamp: Date.now() });
+
+		const mirroredPath = mirrorNativeSessionSnapshot(
+			snapshotFromSessionManager(repo, nativeSession.getSessionId(), nativeSession),
+		);
+		expect(mirroredPath).toBe(nativeSession.getSessionFile());
+	});
 });
 
 describe("PathMapper", () => {

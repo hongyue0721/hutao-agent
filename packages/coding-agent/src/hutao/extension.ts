@@ -22,6 +22,12 @@ import {
 import { defaultReadOnlyInquiryGuard } from "./ephemeral-inquiry/read-only-guard.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
+import {
+	isRepoLocalNativeSessionFile,
+	mirrorNativeSessionEntry,
+	mirrorNativeSessionSnapshot,
+	snapshotFromSessionManager,
+} from "./native-session-mirror.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { TraceRecorder } from "./trace-recorder.ts";
@@ -33,22 +39,45 @@ type HutaoTraceExtensionState = {
 	startupNoticeRepos: Set<string>;
 	nativeEntryLinkUnsubscribe?: () => void;
 	nativeEntryLinkSessionKey?: string;
+	nativeMirrorSessionFile?: string;
 };
 
-function createNativeContextProvider(ctx: ExtensionContext) {
+function createNativeContextProvider(ctx: ExtensionContext, state: HutaoTraceExtensionState) {
 	return () => ({
 		sessionId: ctx.sessionManager.getSessionId(),
 		sessionFile: ctx.sessionManager.getSessionFile(),
+		mirrorSessionFile: state.nativeMirrorSessionFile,
 		leafEntryId: ctx.sessionManager.getLeafId(),
 	});
 }
 
-function ensureNativeEntryLinkListener(ctx: ExtensionContext, state: HutaoTraceExtensionState): void {
-	const sessionKey = ctx.sessionManager.getSessionFile() ?? ctx.sessionManager.getSessionId();
+function refreshNativeMirror(ctx: ExtensionContext, repoRoot: string, traceSessionId: string): string | undefined {
+	const sessionFile = ctx.sessionManager.getSessionFile();
+	if (isRepoLocalNativeSessionFile(repoRoot, sessionFile)) return undefined;
+	return mirrorNativeSessionSnapshot(snapshotFromSessionManager(repoRoot, traceSessionId, ctx.sessionManager));
+}
+
+function ensureNativeEntryLinkListener(
+	ctx: ExtensionContext,
+	state: HutaoTraceExtensionState,
+	repoRoot: string,
+	traceSessionId: string,
+): void {
+	const sessionKey = `${ctx.sessionManager.getSessionFile() ?? ctx.sessionManager.getSessionId()}::${traceSessionId}`;
+	state.nativeMirrorSessionFile = refreshNativeMirror(ctx, repoRoot, traceSessionId);
 	if (state.nativeEntryLinkSessionKey === sessionKey) return;
 	state.nativeEntryLinkUnsubscribe?.();
 	state.nativeEntryLinkSessionKey = sessionKey;
 	state.nativeEntryLinkUnsubscribe = ctx.sessionManager.onAppendEntry((entry) => {
+		try {
+			state.nativeMirrorSessionFile = mirrorNativeSessionEntry(
+				snapshotFromSessionManager(repoRoot, traceSessionId, ctx.sessionManager),
+				entry,
+			);
+		} catch {
+			// Mirroring is best-effort. Canonical trace events and native session persistence
+			// must not be blocked by mirror write failures.
+		}
 		void state.recorder?.recordNativeEntryLink(entry).catch(() => {
 			// Native entry links are best-effort trace metadata and must not affect session persistence.
 		});
@@ -75,15 +104,20 @@ async function createRecorder(
 		state.recorderRepoRoot === repoRoot &&
 		(!currentSessionId || state.recorder.getSessionId() === currentSessionId)
 	) {
-		state.recorder.setNativeContextProvider(createNativeContextProvider(ctx));
-		ensureNativeEntryLinkListener(ctx, state);
+		const traceSessionId = state.recorder.getSessionId();
+		state.nativeMirrorSessionFile = refreshNativeMirror(ctx, repoRoot, traceSessionId);
+		state.recorder.setNativeContextProvider(createNativeContextProvider(ctx, state));
+		ensureNativeEntryLinkListener(ctx, state, repoRoot, traceSessionId);
 		return state.recorder;
 	}
 	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
 	state.recorderRepoRoot = repoRoot;
-	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId, createNativeContextProvider(ctx));
+	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId, createNativeContextProvider(ctx, state));
 	await state.recorder.init();
-	ensureNativeEntryLinkListener(ctx, state);
+	const traceSessionId = state.recorder.getSessionId();
+	state.nativeMirrorSessionFile = refreshNativeMirror(ctx, repoRoot, traceSessionId);
+	state.recorder.setNativeContextProvider(createNativeContextProvider(ctx, state));
+	ensureNativeEntryLinkListener(ctx, state, repoRoot, traceSessionId);
 	return state.recorder;
 }
 

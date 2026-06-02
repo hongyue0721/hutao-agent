@@ -13,6 +13,8 @@ import { SessionRegistry } from "./session-registry.ts";
 interface NativeTraceContext {
 	sessionId: string;
 	sessionFile?: string;
+	/** Repo-local mirrored native session file used for clone/resume when runtime still uses a global session. */
+	mirrorSessionFile?: string;
 	leafEntryId?: string | null;
 }
 
@@ -137,12 +139,19 @@ export class TraceRecorder {
 		this.nativeContextProvider = nativeContextProvider;
 	}
 
+	private nativeSessionFileForTrace(native: NativeTraceContext): string | undefined {
+		return native.mirrorSessionFile ?? native.sessionFile;
+	}
+
 	private nativeTraceFields(): Record<string, unknown> {
 		const native = this.nativeContextProvider?.();
 		if (!native) return {};
+		const nativeSessionFile = this.nativeSessionFileForTrace(native);
 		return {
 			native_session_id: native.sessionId,
-			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
+			native_session_file: nativeSessionFile ? this.paths.toRepoRelative(nativeSessionFile) : undefined,
+			native_source_session_file:
+				native.mirrorSessionFile && native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
 			native_anchor_entry_id: native.leafEntryId ?? null,
 			native_anchor_relation: "current_leaf_at_trace_event",
 		};
@@ -156,6 +165,7 @@ export class TraceRecorder {
 	private appendNativeEditAnchorLink(editId: string, run: RunState): void {
 		const native = this.nativeContextProvider?.();
 		if (!native?.leafEntryId) return;
+		const nativeSessionFile = this.nativeSessionFileForTrace(native);
 		this.store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "native_entry_link",
@@ -168,7 +178,9 @@ export class TraceRecorder {
 			tool_call_id: run.toolCallId,
 			tool_call_ids: [run.toolCallId],
 			native_session_id: native.sessionId,
-			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
+			native_session_file: nativeSessionFile ? this.paths.toRepoRelative(nativeSessionFile) : undefined,
+			native_source_session_file:
+				native.mirrorSessionFile && native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
 			native_entry_id: native.leafEntryId,
 			native_entry_type: "anchor",
 			native_anchor_relation: "current_leaf_after_edit_detected",
@@ -192,6 +204,7 @@ export class TraceRecorder {
 		const relatedMerges = customType === "hutao_merge" ? idsFromCustomData(customData, "merge_id", "merge_ids") : [];
 		const relatedRevertEvents =
 			customType === "hutao_revert" ? idsFromCustomData(customData, "revert_event_id", "revert_event_ids") : [];
+		const nativeSessionFile = this.nativeSessionFileForTrace(native);
 		this.store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "native_entry_link",
@@ -208,7 +221,9 @@ export class TraceRecorder {
 			tool_call_id: toolCallId,
 			tool_call_ids: toolCallIds,
 			native_session_id: native.sessionId,
-			native_session_file: native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
+			native_session_file: nativeSessionFile ? this.paths.toRepoRelative(nativeSessionFile) : undefined,
+			native_source_session_file:
+				native.mirrorSessionFile && native.sessionFile ? this.paths.toRepoRelative(native.sessionFile) : undefined,
 			native_entry_id: entry.id,
 			native_parent_entry_id: entry.parentId,
 			native_entry_type: entry.type,
