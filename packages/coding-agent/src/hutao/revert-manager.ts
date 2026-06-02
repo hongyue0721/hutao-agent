@@ -3,11 +3,13 @@ import { EventStore, HUTAO_SCHEMA_VERSION, type HutaoEvent } from "./event-store
 import { GitAdapter } from "./git-adapter.ts";
 import { createHutaoId } from "./ids.ts";
 import { rebuildIndex } from "./index-builder.ts";
+import { PatchStore } from "./patch-store.ts";
 import { readAllEvents } from "./read-model.ts";
 
 export interface RevertResult {
 	ok: boolean;
 	revertEditId?: string;
+	revertEventId?: string;
 	reason?: string;
 }
 
@@ -45,6 +47,8 @@ export class RevertManager {
 		const reversePatch = await this.git.getWorktreeDiff();
 		const files = stringArray(edit.files);
 		const revertEditId = createHutaoId("e");
+		const patchStore = new PatchStore(join(this.repoRoot, ".hutao", "sessions", targetSessionId));
+		const storedPatch = patchStore.writePatch(revertEditId, reversePatch);
 		const store = new EventStore(this.repoRoot, targetSessionId);
 		store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
@@ -56,8 +60,8 @@ export class RevertManager {
 			actor: "human",
 			tool: "revert",
 			files,
-			patch: null,
-			patch_hash: this.git.computePatchHash(reversePatch),
+			patch: storedPatch.relativePath,
+			patch_hash: storedPatch.hash,
 			before_head: beforeHead,
 			after_head: await this.git.getHead(),
 			before_tree: beforeTree,
@@ -67,16 +71,17 @@ export class RevertManager {
 			reverts_edit: edit.id,
 			summary: `Reverted edit ${edit.id}`,
 		});
+		const revertEventId = createHutaoId("er");
 		store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "edit_reverted",
-			id: createHutaoId("er"),
+			id: revertEventId,
 			session_id: targetSessionId,
 			edit_id: edit.id,
 			revert_edit_id: revertEditId,
 			created_at: new Date().toISOString(),
 		} as HutaoEvent);
 		rebuildIndex(this.repoRoot);
-		return { ok: true, revertEditId };
+		return { ok: true, revertEditId, revertEventId };
 	}
 }

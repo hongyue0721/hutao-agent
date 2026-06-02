@@ -4667,3 +4667,610 @@ npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ep
 4. 不要再把前置致谢移到 README 底部。
 5. README 可以详细，但必须保持正向、清晰、可信。
 ```
+
+---
+
+## 40. Repo-local native session default write path fixed / 2026-05-31
+
+本节更新 38 节末尾 test-blog workflow 暴露的 native resume 缺口。
+
+### 40.1 问题
+
+真实普通项目中曾出现：
+
+```text
+.hutao trace facts 存在：session.json / events.jsonl / raw.jsonl / patches
+但 .hutao/sessions/<id>/native-session.jsonl 不存在
+clone 后只能看到 trace/raw evidence，不能作为 repo-local native chat resume
+```
+
+根因之一是 runtime sessionDir 选择顺序：
+
+```text
+CLI --session-dir / ENV_SESSION_DIR / settingsManager.getSessionDir() / .hutao/sessions
+```
+
+当全局或项目 settings 配置过 sessionDir 时，普通 Git repo 内的新 Hutao 会话会落到外部/global session store，TraceRecorder 仍会写 .hutao trace facts，但 native conversation 不会写进当前 repo。
+
+### 40.2 修复
+
+已在 `packages/coding-agent/src/main.ts` 增加 `resolveRuntimeSessionDir(...)`，新策略：
+
+```text
+1. CLI --session-dir 显式指定最高优先级。
+2. ENV_SESSION_DIR 显式指定第二优先级。
+3. Git repo 内默认优先 .hutao/sessions。
+4. settingsManager.getSessionDir() 作为 fallback。
+```
+
+也就是：
+
+```text
+explicit CLI/env override > repo-local .hutao/sessions > configured settings sessionDir > SessionManager default
+```
+
+目的：普通 `cd repo && hutao` 的新会话默认创建：
+
+```text
+.hutao/sessions/sess_<id>/native-session.jsonl
+```
+
+从而让后续 commit/push/clone 能携带 native conversation state。
+
+### 40.3 测试
+
+新增：
+
+```text
+packages/coding-agent/test/hutao/session-dir-policy.test.ts
+```
+
+覆盖：
+
+```text
+1. Git repo 内即使 settings sessionDir 存在，也默认选择 .hutao/sessions。
+2. SessionManager.create(repo, resolvedDir) 创建 .hutao/sessions/<id>/native-session.jsonl。
+3. CLI sessionDir 仍高于 repo-local。
+4. ENV sessionDir 仍高于 repo-local。
+```
+
+### 40.4 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/session-dir-policy.test.ts test/session-manager/file-operations.test.ts test/hutao/integration.test.ts
+# 55/55 passed
+
+npm --prefix packages/coding-agent run build
+# passed
+
+git diff --check
+# passed
+```
+
+### 40.5 当前准确表述
+
+现在可以说：
+
+```text
+普通 Git repo 内启动 Hutao 时，只要用户没有通过 CLI/env 显式覆盖 sessionDir，runtime 会优先使用 repo-local .hutao/sessions，并创建 .hutao/sessions/<id>/native-session.jsonl 作为 native conversation state。
+```
+
+仍需真实人工验收的完整外部流程：
+
+```text
+server/new repo -> hutao interactive provider session -> commit/push .hutao -> clone elsewhere -> resume picker -> continue writeback
+```
+
+但 runtime 默认写入策略和 clone-path native resume 基础测试已经补齐。
+
+---
+
+## 41. SDK default session path now follows repo-local native policy / 2026-05-31
+
+本节补充 40 节：不仅 CLI 普通启动路径已经优先 `.hutao/sessions`，SDK 默认创建路径也已对齐。
+
+### 41.1 问题
+
+`packages/coding-agent/src/core/sdk.ts` 之前默认：
+
+```ts
+SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir))
+```
+
+这意味着通过 SDK 调用：
+
+```ts
+createAgentSession({ cwd })
+```
+
+即使 `cwd` 位于 Git repo 内，也会默认写到 agentDir/global sessions，而不是当前仓库的：
+
+```text
+.hutao/sessions/<id>/native-session.jsonl
+```
+
+### 41.2 修复
+
+已修改 `packages/coding-agent/src/core/sdk.ts`：
+
+```text
+1. 显式 options.sessionManager 仍然最高优先级，不被覆盖。
+2. cwd 位于 Git repo 内时，默认使用 getRepoLocalSessionDir(cwd)。
+3. 非 Git repo 时继续使用 getDefaultSessionDir(cwd, agentDir)。
+```
+
+### 41.3 测试
+
+更新：
+
+```text
+packages/coding-agent/test/sdk-session-manager.test.ts
+```
+
+覆盖：
+
+```text
+1. 非 Git repo 仍使用 agentDir default session path。
+2. Git repo 内 createAgentSession({ cwd, agentDir }) 默认使用 .hutao/sessions。
+3. 显式 sessionManager override 仍保持原对象。
+4. cwd omitted 时仍可从 explicit sessionManager 派生。
+```
+
+### 41.4 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/session-dir-policy.test.ts test/sdk-session-manager.test.ts test/session-manager/file-operations.test.ts test/hutao/integration.test.ts
+# 59/59 passed
+
+npm --prefix packages/coding-agent run build
+# passed
+
+git diff --check
+# passed
+```
+
+### 41.5 当前准确表述
+
+现在可以说：
+
+```text
+CLI 普通启动和 SDK createAgentSession 默认路径都已对齐 repo-local native session policy：Git repo 内默认写 .hutao/sessions，显式 CLI/env/sessionManager override 保持优先。
+```
+
+---
+
+## 42. Phase E partial: native merge/revert entries now link back to Hutao facts / 2026-05-31
+
+本节更新 Phase E “merge/revert 与 native conversation 对齐”的一部分。不要把它表述成整个 Phase E 已全部完成；本节只记录已实现并测试通过的结构化关联。
+
+### 42.1 已完成
+
+现在 native custom entries 可以结构化关联回 `.hutao/events.jsonl` 中的 merge/revert/edit facts。
+
+完成内容：
+
+```text
+1. MergeResult 增加 mergeIds。
+2. RevertResult 增加 revertEventId。
+3. /merge 追加 hutao_merge native custom entry 时写入 merge_id / merge_ids。
+4. /merge capture resolution 追加 related_edit / related_edits 指向 resolution edit。
+5. /edit revert 追加 hutao_revert native custom entry 时写入 revert_event_id / related_edit / related_edits。
+6. TraceRecorder.recordNativeEntryLink 会识别 hutao_merge / hutao_revert custom entry。
+7. native_entry_link 现在可包含：
+   - related_merge
+   - related_merges
+   - related_revert_event
+   - related_revert_events
+   - related_edit
+   - related_edits
+8. ConversationStore 会重建：
+   - mergeIds
+   - revertEventIds
+   - editIds
+```
+
+### 42.2 修改文件
+
+```text
+packages/coding-agent/src/hutao/merge-manager.ts
+packages/coding-agent/src/hutao/revert-manager.ts
+packages/coding-agent/src/hutao/commands.ts
+packages/coding-agent/src/hutao/trace-recorder.ts
+packages/coding-agent/src/hutao/conversation-store.ts
+packages/coding-agent/test/hutao/core.test.ts
+```
+
+### 42.3 新增测试覆盖
+
+`packages/coding-agent/test/hutao/core.test.ts` 新增测试：
+
+```text
+ConversationStore > links native merge and revert custom entries back to Hutao facts
+```
+
+覆盖：
+
+```text
+1. native hutao_merge custom entry -> native_entry_link.related_merge / related_merges。
+2. native hutao_merge custom entry -> resolution edit related_edits。
+3. native hutao_revert custom entry -> native_entry_link.related_revert_event。
+4. native hutao_revert custom entry -> original/revert edit related_edits。
+5. ConversationStore.load(...) 可恢复 mergeIds / revertEventIds / editIds。
+```
+
+### 42.4 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/session-dir-policy.test.ts test/hutao/subagent-read-model.test.ts test/sdk-session-manager.test.ts test/session-manager/file-operations.test.ts
+# 105/105 passed
+
+npm --prefix packages/coding-agent run build
+# passed
+
+git diff --check
+# passed
+```
+
+### 42.5 当前准确表述
+
+现在可以说：
+
+```text
+merge/revert command 产生的 native custom entries 已能通过 native_entry_link 结构化指回 Hutao merge/revert/edit facts；ConversationStore 可重建这些关系用于 repo-local native conversation timeline。
+```
+
+仍然不要过度说：
+
+```text
+1. 所有 wizard 分支都已经完整追加 native custom entry。
+2. 所有 merge/revert 冲突 UX 都已完整产品化。
+3. Phase E 已全部完成。
+```
+
+---
+
+## 43. Merge wizard now appends native merge trace entries / 2026-05-31
+
+本节补充 42 节：`/merge session ... --wizard` 的 native custom entry 一致性已补齐。
+
+### 43.1 问题
+
+42 节完成后，直接命令路径已经会追加 `hutao_merge` native custom entry，例如：
+
+```text
+/merge session <id> --history
+/merge session <id> --apply-edits
+/merge session <id> --apply-tree
+/merge session <id> --resolve
+/merge session <id> --skip
+/merge session <id> --abort
+```
+
+但 wizard 路径中的部分分支只写 `.hutao` merge event 和 UI notify，没有追加 native custom entry：
+
+```text
+/merge session <id> --wizard
+  Import History
+  Apply Edits
+  Apply Final Snapshot
+  Skip Last Conflict
+  Skip Last Conflict and Continue
+  Capture Resolution
+  Abort
+```
+
+### 43.2 修复
+
+已在 `packages/coding-agent/src/hutao/commands.ts` 抽出：
+
+```text
+appendNativeMergeTraceEntry(...)
+```
+
+直接命令与 wizard 分支统一使用该 helper。
+
+现在以下 wizard 分支会追加 `hutao_merge` native custom entry：
+
+```text
+Import History
+Apply Edits
+Apply Final Snapshot
+Skip Last Conflict
+Skip Last Conflict and Continue
+Capture Resolution
+Abort
+conflict submenu: Skip / Continue / Capture Resolution / Abort
+```
+
+Preview only 仍然只预览，不追加 native custom entry。
+
+### 43.3 测试
+
+更新：
+
+```text
+packages/coding-agent/test/hutao/integration.test.ts
+```
+
+覆盖：
+
+```text
+1. wizard Preview only 不追加 hutao_merge native entry。
+2. wizard Skip Last Conflict and Continue 追加两条 hutao_merge native entry。
+3. 第一条 mode=skip 且 skipped_edits 指向冲突 edit。
+4. 第二条 mode=apply_edits 且 merge_ids 存在。
+```
+
+### 43.4 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/integration.test.ts test/hutao/core.test.ts
+# 47/47 passed
+
+npm --prefix packages/coding-agent run build
+# passed
+
+git diff --check
+# passed
+```
+
+### 43.5 当前准确表述
+
+现在可以说：
+
+```text
+直接 /merge 命令和 /merge --wizard 中实际写 merge event 的分支都会追加 hutao_merge native custom entry，并通过 native_entry_link 结构化指回 Hutao merge/edit facts。
+```
+
+仍然不要过度说：
+
+```text
+1. 所有 merge/revert UX 已完整产品化。
+2. 所有 conflict resolution 都能自动解决。
+3. Phase E 已全部完成。
+```
+
+---
+
+## 44. Phase E partial: revert preview native custom entry / 2026-05-31
+
+本节继续补 Phase E “revert preview 与 native custom entry 关联”。不要把本节表述成完整 revert UX 产品化；本节只记录 preview 在 native conversation 层的证据与关联。
+
+### 44.1 已完成
+
+`/edit revert <id>` 的 preview 阶段现在会追加 native custom entry：
+
+```text
+hutao_revert_preview
+```
+
+该 entry 是 native conversation/UI 证据，不是 canonical `.hutao/events.jsonl` fact。
+
+preview entry 包含：
+
+```text
+edit_id
+status
+files
+working_tree
+reverse_patch_check
+later_related_edit_ids
+related_edit
+related_edits
+patch
+patch_hash
+created_at
+```
+
+执行流程现在是：
+
+```text
+/edit revert <id>
+├── preview reverse patch
+├── append native custom entry: hutao_revert_preview
+├── user confirm
+├── RevertManager writes canonical edit + edit_reverted events
+└── append native custom entry: hutao_revert
+```
+
+### 44.2 安全边界
+
+```text
+1. preview 不写 canonical .hutao event。
+2. preview 不改变工作区。
+3. preview 不替代 edit_reverted 事实事件。
+4. 真正 revert 成功后，仍由 RevertManager 追加 edit + edit_reverted canonical facts。
+```
+
+### 44.3 测试
+
+更新：
+
+```text
+packages/coding-agent/test/hutao/core.test.ts
+packages/coding-agent/test/hutao/integration.test.ts
+```
+
+覆盖：
+
+```text
+1. hutao_revert_preview native custom entry 能通过 native_entry_link 关联 related_edits。
+2. preview entry 不含 related_revert_event，因为此时还没有真正 revert fact。
+3. /edit revert <id> 会先追加 hutao_revert_preview，再追加 hutao_revert。
+4. preview 不写 canonical .hutao event。
+5. revert 完成后仍写 canonical edit + edit_reverted events。
+```
+
+### 44.4 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/integration.test.ts test/hutao/core.test.ts
+# 48/48 passed
+```
+
+### 44.5 当前准确表述
+
+现在可以说：
+
+```text
+revert preview 已进入 repo-local native conversation 证据层，且能通过 native_entry_link 关联目标 edit；真正 revert 完成后仍通过 edit/edit_reverted canonical events 记录事实。
+```
+
+仍然不要过度说：
+
+```text
+1. revert conflict UX 已完整产品化。
+2. 所有 revert 场景都能自动解决冲突。
+3. Phase E 已全部完成。
+```
+
+---
+
+## 45. Revert edits now store reverse patches / 2026-05-31
+
+本节补充 revert 事实链。此前 `RevertManager` 生成的 revert edit 会记录 `patch_hash`，但 `patch` 字段为 `null`。这不符合 Hutao 对 edit 的核心要求：实际文件变化应保存 patch。
+
+### 45.1 已完成
+
+`packages/coding-agent/src/hutao/revert-manager.ts` 已修改：
+
+```text
+1. apply reverse patch 后读取当前 worktree diff。
+2. 使用 PatchStore 写入 reverse patch：
+   .hutao/sessions/<targetSession>/patches/<revertEditId>.patch
+3. revert edit event 现在写入：
+   patch: patches/<revertEditId>.patch
+   patch_hash: sha256:...
+4. edit_reverted event 继续引用原 edit 与 revert edit。
+```
+
+### 45.2 测试
+
+更新：
+
+```text
+packages/coding-agent/test/hutao/core.test.ts
+```
+
+覆盖：
+
+```text
+1. RevertManager 成功 reverse apply edit。
+2. revert edit event 的 patch 字段不再是 null。
+3. revert patch 文件存在于 .hutao/sessions/<session>/patches/。
+4. revert edit patch_hash 为 sha256。
+5. edit_reverted event 的 revert_edit_id 指向 revert edit。
+```
+
+### 45.3 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/integration.test.ts
+# 48/48 passed
+
+npm --prefix packages/coding-agent run build
+# passed
+
+git diff --check
+# passed
+```
+
+### 45.4 当前准确表述
+
+现在可以说：
+
+```text
+revert 产生的新 edit 会像普通 edit 一样保存 patch 文件和 patch_hash；edit_reverted event 负责表达原 edit 与 revert edit 的关系。
+```
+
+---
+
+## 46. Conversation timeline and hydration now render merge/revert links / 2026-05-31
+
+本节补充 42-45 节。底层 `ConversationStore` 已能重建 `mergeIds` 与 `revertEventIds` 后，展示层也已同步显示这些关系。
+
+### 46.1 已完成
+
+更新：
+
+```text
+packages/coding-agent/src/hutao/conversation-renderer.ts
+packages/coding-agent/src/hutao/conversation-hydrator.ts
+```
+
+现在 conversation timeline 的 `links:` 行会展示：
+
+```text
+prompting=...
+run=...
+edit=...
+merge=...
+revert=...
+tool_call=...
+```
+
+conversation hydration 注入文本中的 `trace:` 行会展示：
+
+```text
+promptings=...
+runs=...
+edits=...
+merges=...
+revert_events=...
+tool_calls=...
+```
+
+### 46.2 测试
+
+更新：
+
+```text
+packages/coding-agent/test/hutao/core.test.ts
+```
+
+覆盖：
+
+```text
+1. renderConversationTimeline(snapshot) 包含 merge=m_...。
+2. renderConversationTimeline(snapshot) 包含 revert=er_...。
+3. buildConversationHydration(snapshot, { includeCustomEntries: true }) 包含 merges=m_...。
+4. buildConversationHydration(snapshot, { includeCustomEntries: true }) 包含 revert_events=er_...。
+```
+
+### 46.3 验证
+
+本轮验证通过：
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/integration.test.ts
+# 48/48 passed
+
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/session-dir-policy.test.ts test/hutao/subagent-read-model.test.ts test/sdk-session-manager.test.ts test/session-manager/file-operations.test.ts
+# 106/106 passed
+
+npm --prefix packages/coding-agent run build
+# passed
+
+git diff --check
+# passed
+```
+
+### 46.4 当前准确表述
+
+现在可以说：
+
+```text
+repo-local native conversation timeline 与 hydration 文本不仅展示 prompting/run/edit/tool_call links，也展示 merge/revert fact links，方便用户从原生聊天上下文跳回 Hutao merge/revert facts。
+```

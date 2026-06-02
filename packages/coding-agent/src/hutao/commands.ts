@@ -14,7 +14,7 @@ import { GitBranchPolicy, parseGitBranchPolicyMode, type GitBranchPolicyMode } f
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
-import { MergeManager, type MergeMode } from "./merge-manager.ts";
+import { MergeManager, type MergeMode, type MergeResult } from "./merge-manager.ts";
 import { defaultProcessActionRegistrations } from "./process-actions/default-actions.ts";
 import { HutaoProcessActionExecutor, processActionTargetFromNode } from "./process-actions/executor.ts";
 import { HutaoProcessActionRegistry } from "./process-actions/registry.ts";
@@ -69,6 +69,30 @@ function appendNativeTraceEntry(ctx: ExtensionCommandContext, customType: string
 		// Native custom entries are UI/linkage helpers. Hutao canonical .hutao events remain
 		// the source of truth and command success must not depend on native append support.
 	}
+}
+
+function appendNativeMergeTraceEntry(
+	ctx: ExtensionCommandContext,
+	sourceSession: string,
+	result: MergeResult,
+	options: { mode?: string; targetSession?: string } = {},
+): void {
+	appendNativeTraceEntry(ctx, "hutao_merge", {
+		source_session: sourceSession,
+		target_session: options.targetSession,
+		mode: options.mode ?? result.mode,
+		status: result.ok ? "completed" : result.conflictEdits.length ? "conflict" : "failed",
+		merge_id: result.mergeIds[0],
+		merge_ids: result.mergeIds,
+		message: result.message,
+		changed_files: result.changedFiles,
+		applied_edits: result.appliedEdits,
+		skipped_edits: result.skippedEdits,
+		conflict_edits: result.conflictEdits,
+		resolution_edits: result.resolutionEdits,
+		related_edit: result.resolutionEdits[0],
+		related_edits: result.resolutionEdits,
+	});
 }
 
 function findEvent(events: HutaoEvent[], idPrefix: string, type?: string): HutaoEvent | undefined {
@@ -136,16 +160,21 @@ function editPatchPath(repoRoot: string, edit: HutaoEvent): string | undefined {
 		: undefined;
 }
 
+interface RevertPreviewResult {
+	confirmed: boolean;
+	preview?: Record<string, unknown>;
+}
+
 async function previewRevertEdit(
 	editIdPrefix: string,
 	repoRoot: string,
 	ctx: ExtensionCommandContext,
-): Promise<boolean> {
+): Promise<RevertPreviewResult> {
 	const events = readEvents(repoRoot);
 	const edit = findEvent(events, editIdPrefix, "edit");
 	if (!edit) {
 		notify(ctx, "Hutao revert preview", [`Edit not found: ${editIdPrefix}`], "warning");
-		return false;
+		return { confirmed: false };
 	}
 	const git = new GitAdapter(repoRoot);
 	const files = stringArray(edit.files);
@@ -173,8 +202,23 @@ async function previewRevertEdit(
 	if (reverseCheck && !reverseCheck.ok)
 		lines.push("", reverseCheck.stderr || reverseCheck.stdout || "Reverse patch check failed.");
 	notify(ctx, "Hutao revert preview", lines, reverseCheck?.ok === false || status !== "clean" ? "warning" : "info");
-	if (!patchPath || reverseCheck?.ok === false) return false;
-	return ctx.ui.confirm("Hutao revert preview", `Apply reverse patch for edit ${edit.id}?`);
+	const preview = {
+		edit_id: edit.id,
+		status: reverseCheck?.ok === false || status !== "clean" ? "warning" : "ready",
+		files,
+		working_tree: status,
+		reverse_patch_check: reverseCheck ? (reverseCheck.ok ? "ok" : "failed") : "no_patch",
+		later_related_edit_ids: laterRelatedEdits.map((event) => event.id),
+		related_edit: edit.id,
+		related_edits: [edit.id],
+		patch: edit.patch,
+		patch_hash: edit.patch_hash,
+		created_at: new Date().toISOString(),
+	};
+	appendNativeTraceEntry(ctx, "hutao_revert_preview", preview);
+	if (!patchPath || reverseCheck?.ok === false) return { confirmed: false, preview };
+	const confirmed = await ctx.ui.confirm("Hutao revert preview", `Apply reverse patch for edit ${edit.id}?`);
+	return { confirmed, preview };
 }
 
 async function runPromptingTree(
@@ -898,14 +942,17 @@ export async function editCommand(args: string, ctx: ExtensionCommandContext): P
 		const sessions = new SessionRegistry(repoRoot).readSessions();
 		const targetSession = sessions[sessions.length - 1]?.id;
 		if (!targetSession) return notify(ctx, "Hutao edit", ["No Hutao session exists."], "warning");
-		const confirmed = await previewRevertEdit(editId, repoRoot, ctx);
-		if (!confirmed) return notify(ctx, "Hutao edit", ["Revert cancelled."]);
+		const preview = await previewRevertEdit(editId, repoRoot, ctx);
+		if (!preview.confirmed) return notify(ctx, "Hutao edit", ["Revert cancelled."]);
 		const result = await new RevertManager(repoRoot).revertEdit(editId, targetSession);
 		appendNativeTraceEntry(ctx, "hutao_revert", {
 			edit_id: editId,
 			target_session: targetSession,
 			status: result.ok ? "completed" : "failed",
 			revert_edit_id: result.revertEditId,
+			revert_event_id: result.revertEventId,
+			related_edit: result.revertEditId,
+			related_edits: [editId, result.revertEditId].filter(Boolean),
 			reason: result.reason,
 		});
 		if (!result.ok) return notify(ctx, "Hutao edit", [result.reason ?? "Revert failed."], "warning");
@@ -1229,13 +1276,7 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		);
 		if (!confirmed) return notify(ctx, "Hutao merge", ["Skip cancelled."]);
 		const result = await new MergeManager(repoRoot).skipLastConflict(sourceIdPrefix);
-		appendNativeTraceEntry(ctx, "hutao_merge", {
-			source_session: sourceIdPrefix,
-			mode: "skip",
-			status: result.ok ? "completed" : "failed",
-			skipped_edits: result.skippedEdits,
-			message: result.message,
-		});
+		appendNativeMergeTraceEntry(ctx, sourceIdPrefix, result, { mode: "skip" });
 		return notify(
 			ctx,
 			"Hutao merge",
@@ -1253,14 +1294,7 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		);
 		if (!confirmed) return notify(ctx, "Hutao merge", ["Resolution capture cancelled."]);
 		const result = await new MergeManager(repoRoot).captureResolutionEdit(target, source.id);
-		appendNativeTraceEntry(ctx, "hutao_merge", {
-			source_session: source.id,
-			target_session: target,
-			mode: "capture_resolution",
-			status: result.ok ? "completed" : "failed",
-			resolution_edits: result.resolutionEdits,
-			message: result.message,
-		});
+		appendNativeMergeTraceEntry(ctx, source.id, result, { mode: "capture_resolution", targetSession: target });
 		return notify(
 			ctx,
 			"Hutao merge",
@@ -1282,17 +1316,7 @@ export async function mergeCommand(args: string, ctx: ExtensionCommandContext): 
 		return notify(ctx, "Hutao merge", [t(repoRoot, "menu.cancelled")]);
 	}
 	const result = await manager.mergeSession(sourceIdPrefix, mode);
-	appendNativeTraceEntry(ctx, "hutao_merge", {
-		source_session: sourceIdPrefix,
-		mode,
-		status: result.ok ? "completed" : result.conflictEdits.length ? "conflict" : "failed",
-		message: result.message,
-		changed_files: result.changedFiles,
-		applied_edits: result.appliedEdits,
-		skipped_edits: result.skippedEdits,
-		conflict_edits: result.conflictEdits,
-		resolution_edits: result.resolutionEdits,
-	});
+	appendNativeMergeTraceEntry(ctx, sourceIdPrefix, result, { mode });
 	const lines = [
 		result.message,
 		`mode: ${result.mode}`,
@@ -1332,10 +1356,12 @@ async function runMergeWizard(sourceIdPrefix: string, repoRoot: string, ctx: Ext
 	}
 	if (choice === "Skip Last Conflict" || choice === "Skip Last Conflict and Continue") {
 		const result = await manager.skipLastConflict(sourceIdPrefix);
+		appendNativeMergeTraceEntry(ctx, sourceIdPrefix, result, { mode: "skip" });
 		const lines = [result.message, `skipped edits: ${result.skippedEdits.join(", ") || "none"}`];
 		if (choice === "Skip Last Conflict and Continue" && result.ok) {
 			if (await confirmMergeOperation(repoRoot, ctx, manager, sourceIdPrefix, "apply_edits")) {
 				const continued = await manager.mergeSession(sourceIdPrefix, "apply_edits");
+				appendNativeMergeTraceEntry(ctx, sourceIdPrefix, continued, { mode: "apply_edits" });
 				lines.push(
 					continued.message,
 					`continued applied edits: ${continued.appliedEdits.join(", ") || "none"}`,
@@ -1355,6 +1381,7 @@ async function runMergeWizard(sourceIdPrefix: string, repoRoot: string, ctx: Ext
 		if (!source || !target)
 			return notify(ctx, "Hutao merge wizard", ["Cannot resolve source/target session."], "warning");
 		const result = await manager.captureResolutionEdit(target, source.id);
+		appendNativeMergeTraceEntry(ctx, source.id, result, { mode: "capture_resolution", targetSession: target });
 		notify(
 			ctx,
 			"Hutao merge wizard",
@@ -1365,6 +1392,7 @@ async function runMergeWizard(sourceIdPrefix: string, repoRoot: string, ctx: Ext
 	}
 	if (choice === "Abort") {
 		const result = await manager.mergeSession(sourceIdPrefix, "abort");
+		appendNativeMergeTraceEntry(ctx, sourceIdPrefix, result, { mode: "abort" });
 		notify(ctx, "Hutao merge wizard", [result.message], result.ok ? "info" : "warning");
 		return;
 	}
@@ -1374,6 +1402,7 @@ async function runMergeWizard(sourceIdPrefix: string, repoRoot: string, ctx: Ext
 		return notify(ctx, "Hutao merge wizard", [t(repoRoot, "menu.cancelled")]);
 	}
 	const result = await manager.mergeSession(sourceIdPrefix, mode);
+	appendNativeMergeTraceEntry(ctx, sourceIdPrefix, result, { mode });
 	const lines = [
 		result.message,
 		`mode: ${result.mode}`,
@@ -1392,10 +1421,12 @@ async function runMergeWizard(sourceIdPrefix: string, repoRoot: string, ctx: Ext
 		]);
 		if (next === "Skip Last Conflict" || next === "Skip Last Conflict and Continue") {
 			const skipped = await manager.skipLastConflict(sourceIdPrefix);
+			appendNativeMergeTraceEntry(ctx, sourceIdPrefix, skipped, { mode: "skip" });
 			lines.push(skipped.message, `wizard skipped edits: ${skipped.skippedEdits.join(", ") || "none"}`);
 			if (next === "Skip Last Conflict and Continue" && skipped.ok) {
 				if (await confirmMergeOperation(repoRoot, ctx, manager, sourceIdPrefix, "apply_edits")) {
 					const continued = await manager.mergeSession(sourceIdPrefix, "apply_edits");
+					appendNativeMergeTraceEntry(ctx, sourceIdPrefix, continued, { mode: "apply_edits" });
 					lines.push(
 						continued.message,
 						`continued applied edits: ${continued.appliedEdits.join(", ") || "none"}`,
@@ -1411,10 +1442,12 @@ async function runMergeWizard(sourceIdPrefix: string, repoRoot: string, ctx: Ext
 			const target = sessions.find((session) => session.id !== source?.id)?.id ?? sessions.at(-1)?.id;
 			if (source && target) {
 				const captured = await manager.captureResolutionEdit(target, source.id);
+				appendNativeMergeTraceEntry(ctx, source.id, captured, { mode: "capture_resolution", targetSession: target });
 				lines.push(captured.message, `wizard resolution edits: ${captured.resolutionEdits.join(", ") || "none"}`);
 			}
 		} else if (next === "Abort") {
 			const aborted = await manager.mergeSession(sourceIdPrefix, "abort");
+			appendNativeMergeTraceEntry(ctx, sourceIdPrefix, aborted, { mode: "abort" });
 			lines.push(aborted.message);
 		} else {
 			lines.push("next actions: resolve manually, then rerun /merge session <source> --wizard");

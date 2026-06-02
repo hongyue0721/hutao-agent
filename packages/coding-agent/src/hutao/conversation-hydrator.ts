@@ -94,6 +94,8 @@ function linksText(links: ConversationTraceLinks, policy: Required<ConversationH
 		links.promptingIds.length ? `promptings=${links.promptingIds.join(",")}` : undefined,
 		links.runIds.length ? `runs=${links.runIds.join(",")}` : undefined,
 		policy.includeEditLinks && links.editIds.length ? `edits=${links.editIds.join(",")}` : undefined,
+		links.mergeIds.length ? `merges=${links.mergeIds.join(",")}` : undefined,
+		links.revertEventIds.length ? `revert_events=${links.revertEventIds.join(",")}` : undefined,
 		links.toolCallIds.length ? `tool_calls=${links.toolCallIds.join(",")}` : undefined,
 	].filter(Boolean);
 	return parts.length ? parts.join(" ") : undefined;

@@ -85,6 +85,22 @@ function getNativeCustomType(entry: SessionEntry): string | undefined {
 	return entry.customType;
 }
 
+function getNativeCustomData(entry: SessionEntry): Record<string, unknown> {
+	if (entry.type === "custom" && entry.data && typeof entry.data === "object") return entry.data as Record<string, unknown>;
+	if (entry.type === "custom_message" && entry.details && typeof entry.details === "object") {
+		return entry.details as Record<string, unknown>;
+	}
+	return {};
+}
+
+function stringValue(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function idsFromCustomData(data: Record<string, unknown>, singular: string | undefined, plural: string): string[] {
+	return uniqueStrings([singular ? stringValue(data[singular]) : undefined, ...stringArray(data[plural])]);
+}
+
 export class TraceRecorder {
 	private repoRoot: string;
 	private sessionId: string;
@@ -164,7 +180,17 @@ export class TraceRecorder {
 		if (!native) return;
 		const toolCallIds = getNativeToolCallIds(entry);
 		const toolCallId = toolCallIds[0];
-		const relatedEdits = uniqueStrings(toolCallIds.flatMap((id) => this.toolCallEditIds.get(id) ?? []));
+		const customType = getNativeCustomType(entry);
+		const customData = getNativeCustomData(entry);
+		const relatedEdits = uniqueStrings([
+			...toolCallIds.flatMap((id) => this.toolCallEditIds.get(id) ?? []),
+			...idsFromCustomData(customData, "related_edit", "related_edits"),
+			...idsFromCustomData(customData, "revert_edit_id", "revert_edit_ids"),
+			...idsFromCustomData(customData, undefined, "resolution_edits"),
+		]);
+		const relatedMerges = customType === "hutao_merge" ? idsFromCustomData(customData, "merge_id", "merge_ids") : [];
+		const relatedRevertEvents =
+			customType === "hutao_revert" ? idsFromCustomData(customData, "revert_event_id", "revert_event_ids") : [];
 		this.store.append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "native_entry_link",
@@ -174,6 +200,10 @@ export class TraceRecorder {
 			related_run: toolCallId ? this.toolCallRunIds.get(toolCallId) : undefined,
 			related_edit: relatedEdits[0],
 			related_edits: relatedEdits,
+			related_merge: relatedMerges[0],
+			related_merges: relatedMerges,
+			related_revert_event: relatedRevertEvents[0],
+			related_revert_events: relatedRevertEvents,
 			tool_call_id: toolCallId,
 			tool_call_ids: toolCallIds,
 			native_session_id: native.sessionId,
@@ -182,7 +212,7 @@ export class TraceRecorder {
 			native_parent_entry_id: entry.parentId,
 			native_entry_type: entry.type,
 			native_message_role: getNativeMessageRole(entry),
-			native_custom_type: getNativeCustomType(entry),
+			native_custom_type: customType,
 			created_at: new Date().toISOString(),
 		});
 	}

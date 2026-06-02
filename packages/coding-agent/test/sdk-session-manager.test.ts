@@ -1,10 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.ts";
-import { SessionManager } from "../src/core/session-manager.ts";
+import { getRepoLocalSessionDir, SessionManager } from "../src/core/session-manager.ts";
 
 describe("createAgentSession session manager defaults", () => {
 	let tempDir: string;
@@ -25,7 +26,7 @@ describe("createAgentSession session manager defaults", () => {
 		}
 	});
 
-	it("uses agentDir for the default persisted session path", async () => {
+	it("uses agentDir for the default persisted session path outside Git repos", async () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5");
 		expect(model).toBeTruthy();
 
@@ -42,6 +43,26 @@ describe("createAgentSession session manager defaults", () => {
 
 		expect(sessionDir).toBe(expectedSessionDir);
 		expect(dirname(sessionFile!)).toBe(expectedSessionDir);
+
+		session.dispose();
+	});
+
+	it("uses repo-local native sessions by default inside Git repos", async () => {
+		execFileSync("git", ["-C", cwd, "init"], { stdio: "ignore" });
+		const model = getModel("anthropic", "claude-sonnet-4-5");
+		expect(model).toBeTruthy();
+
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model: model!,
+		});
+
+		const sessionDir = session.sessionManager.getSessionDir();
+		const sessionFile = session.sessionManager.getSessionFile();
+
+		expect(sessionDir).toBe(getRepoLocalSessionDir(cwd));
+		expect(sessionFile).toBe(join(cwd, ".hutao", "sessions", session.sessionManager.getSessionId(), "native-session.jsonl"));
 
 		session.dispose();
 	});

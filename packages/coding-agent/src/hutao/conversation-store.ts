@@ -11,6 +11,8 @@ export interface ConversationTraceLinks {
 	promptingIds: string[];
 	runIds: string[];
 	editIds: string[];
+	mergeIds: string[];
+	revertEventIds: string[];
 	toolCallIds: string[];
 	eventIds: string[];
 }
@@ -102,10 +104,20 @@ function linksForEntry(entry: SessionEntry, events: HutaoEvent[]): ConversationT
 			.filter((event) => event.type === "run_finished" && runIds.includes(String(event.id)))
 			.flatMap((event) => stringArray(event.produced_edit_ids)),
 	]);
+	const mergeIds = unique([
+		...links.map((event) => stringValue(event.related_merge)),
+		...links.flatMap((event) => stringArray(event.related_merges)),
+	]);
+	const revertEventIds = unique([
+		...links.map((event) => stringValue(event.related_revert_event)),
+		...links.flatMap((event) => stringArray(event.related_revert_events)),
+	]);
 	return {
 		promptingIds,
 		runIds,
 		editIds,
+		mergeIds,
+		revertEventIds,
 		toolCallIds,
 		eventIds: unique(links.map((event) => stringValue(event.id))),
 	};

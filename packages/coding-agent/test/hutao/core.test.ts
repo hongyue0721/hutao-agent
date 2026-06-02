@@ -402,6 +402,113 @@ describe("ConversationStore", () => {
 		expect(lines).toContain("tool call write tool_conversation");
 	});
 
+	it("links native merge and revert custom entries back to Hutao facts", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const sessionDir = getRepoLocalSessionDir(repo)!;
+		const nativeSession = SessionManager.create(repo, sessionDir);
+		const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+			sessionId: nativeSession.getSessionId(),
+			sessionFile: nativeSession.getSessionFile(),
+			leafEntryId: nativeSession.getLeafId(),
+		}));
+		await recorder.init();
+		const store = new EventStore(repo, nativeSession.getSessionId());
+		nativeSession.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "ready for native trace links" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "endTurn",
+			timestamp: Date.now(),
+		} as any);
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "merge",
+			id: "m_native_link",
+			session_id: nativeSession.getSessionId(),
+			source_session: "fs_source",
+			target_session: nativeSession.getSessionId(),
+			mode: "apply_tree",
+			status: "completed",
+			resolution_edits: ["e_resolution"],
+			created_at: new Date().toISOString(),
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "edit_reverted",
+			id: "er_native_link",
+			session_id: nativeSession.getSessionId(),
+			edit_id: "e_original",
+			revert_edit_id: "e_revert",
+			created_at: new Date().toISOString(),
+		});
+
+		const mergeEntryId = nativeSession.appendCustomEntry("hutao_merge", {
+			merge_id: "m_native_link",
+			merge_ids: ["m_native_link"],
+			resolution_edits: ["e_resolution"],
+		});
+		await recorder.recordNativeEntryLink(nativeSession.getEntry(mergeEntryId)!);
+		const previewEntryId = nativeSession.appendCustomEntry("hutao_revert_preview", {
+			edit_id: "e_original",
+			related_edits: ["e_original"],
+			reverse_patch_check: "ok",
+		});
+		await recorder.recordNativeEntryLink(nativeSession.getEntry(previewEntryId)!);
+		const revertEntryId = nativeSession.appendCustomEntry("hutao_revert", {
+			edit_id: "e_original",
+			revert_edit_id: "e_revert",
+			revert_event_id: "er_native_link",
+			related_edits: ["e_original", "e_revert"],
+		});
+		await recorder.recordNativeEntryLink(nativeSession.getEntry(revertEntryId)!);
+
+		const events = readTraceEvents(repo, nativeSession.getSessionId());
+		const mergeLink = events.find(
+			(event) => event.type === "native_entry_link" && event.native_entry_id === mergeEntryId,
+		)!;
+		expect(mergeLink.related_merge).toBe("m_native_link");
+		expect(mergeLink.related_merges).toEqual(["m_native_link"]);
+		expect(mergeLink.related_edits).toEqual(["e_resolution"]);
+		const previewLink = events.find(
+			(event) => event.type === "native_entry_link" && event.native_entry_id === previewEntryId,
+		)!;
+		expect(previewLink.related_edits).toEqual(["e_original"]);
+		expect(previewLink.related_revert_event).toBeUndefined();
+		const revertLink = events.find(
+			(event) => event.type === "native_entry_link" && event.native_entry_id === revertEntryId,
+		)!;
+		expect(revertLink.related_revert_event).toBe("er_native_link");
+		expect(revertLink.related_edits).toEqual(["e_original", "e_revert"]);
+
+		const snapshot = new ConversationStore(repo).load(nativeSession.getSessionId());
+		const mergeItem = snapshot.items.find((item) => item.entry.id === mergeEntryId)!;
+		expect(mergeItem.links.mergeIds).toEqual(["m_native_link"]);
+		expect(mergeItem.links.editIds).toEqual(["e_resolution"]);
+		const previewItem = snapshot.items.find((item) => item.entry.id === previewEntryId)!;
+		expect(previewItem.links.editIds).toEqual(["e_original"]);
+		expect(previewItem.links.revertEventIds).toEqual([]);
+		const revertItem = snapshot.items.find((item) => item.entry.id === revertEntryId)!;
+		expect(revertItem.links.revertEventIds).toEqual(["er_native_link"]);
+		expect(revertItem.links.editIds).toEqual(["e_original", "e_revert"]);
+		const rendered = renderConversationTimeline(snapshot).join("\n");
+		expect(rendered).toContain("merge=m_native_link");
+		expect(rendered).toContain("revert=er_native_link");
+		const hydration = buildConversationHydration(snapshot, { includeCustomEntries: true });
+		expect(hydration.content).toContain("merges=m_native_link");
+		expect(hydration.content).toContain("revert_events=er_native_link");
+	});
+
 	it("reports raw-only history as degraded instead of fabricating chat entries", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);
@@ -756,6 +863,13 @@ describe("RevertManager", () => {
 		const result = await new RevertManager(repo).revertEdit(edits[0].id, recorder.getSessionId());
 		expect(result.ok).toBe(true);
 		expect(readFileSync(join(repo, "file.txt"), "utf-8").replace(/\r\n/g, "\n")).toBe("before\n");
+		const events = readTraceEvents(repo, recorder.getSessionId());
+		const revertEdit = events.find((event) => event.type === "edit" && event.id === result.revertEditId)!;
+		expect(revertEdit.patch).toBe(`patches/${result.revertEditId}.patch`);
+		expect(String(revertEdit.patch_hash)).toMatch(/^sha256:/);
+		expect(existsSync(join(repo, ".hutao", "sessions", recorder.getSessionId(), String(revertEdit.patch)))).toBe(true);
+		const reverted = events.find((event) => event.type === "edit_reverted" && event.id === result.revertEventId)!;
+		expect(reverted.revert_edit_id).toBe(result.revertEditId);
 	});
 });
 

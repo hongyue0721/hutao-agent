@@ -480,6 +480,24 @@ export interface MainOptions {
 	extensionFactories?: ExtensionFactory[];
 }
 
+export interface RuntimeSessionDirPolicyInput {
+	cwd: string;
+	cliSessionDir?: string;
+	envSessionDir?: string;
+	settingsSessionDir?: string;
+}
+
+export function resolveRuntimeSessionDir({
+	cwd,
+	cliSessionDir,
+	envSessionDir,
+	settingsSessionDir,
+}: RuntimeSessionDirPolicyInput): string | undefined {
+	if (cliSessionDir) return normalizePath(cliSessionDir);
+	if (envSessionDir) return expandTildePath(envSessionDir);
+	return getRepoLocalSessionDir(cwd) ?? settingsSessionDir;
+}
+
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
@@ -559,11 +577,12 @@ export async function main(args: string[], options?: MainOptions) {
 	// the target session cwd is known. The startup-cwd settings manager is used only for
 	// sessionDir lookup during session selection.
 	const envSessionDir = process.env[ENV_SESSION_DIR];
-	const explicitSessionDir =
-		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
-		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
-		startupSettingsManager.getSessionDir();
-	const sessionDir = explicitSessionDir ?? getRepoLocalSessionDir(cwd);
+	const sessionDir = resolveRuntimeSessionDir({
+		cwd,
+		cliSessionDir: parsed.sessionDir,
+		envSessionDir,
+		settingsSessionDir: startupSettingsManager.getSessionDir(),
+	});
 	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {

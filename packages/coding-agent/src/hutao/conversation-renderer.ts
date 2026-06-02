@@ -81,6 +81,8 @@ function renderLinks(item: ConversationTimelineItem): string | undefined {
 		links.promptingIds.length ? `prompting=${links.promptingIds.map(shortId).join(",")}` : undefined,
 		links.runIds.length ? `run=${links.runIds.map(shortId).join(",")}` : undefined,
 		links.editIds.length ? `edit=${links.editIds.map(shortId).join(",")}` : undefined,
+		links.mergeIds.length ? `merge=${links.mergeIds.map(shortId).join(",")}` : undefined,
+		links.revertEventIds.length ? `revert=${links.revertEventIds.map(shortId).join(",")}` : undefined,
 		links.toolCallIds.length ? `tool_call=${links.toolCallIds.map(shortId).join(",")}` : undefined,
 	].filter(Boolean);
 	return parts.length ? parts.join(" ") : undefined;

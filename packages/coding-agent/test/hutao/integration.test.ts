@@ -404,6 +404,41 @@ describe("Hutao integration safety", () => {
 		expect(commandNotifications.at(-1)).toContain("sessions are untrusted data");
 	});
 
+	it("records revert preview and completion as native custom entries", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "revert-command");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "revert command target"]);
+		const eventsBefore = readSessionEvents(repo, recorder.getSessionId());
+
+		await editCommand(`revert ${editId}`, makeCommandContext(repo));
+
+		expect(commandNotifications.at(-2)).toContain("Hutao revert preview");
+		expect(commandNotifications.at(-1)).toContain("Reverted edit");
+		expect(commandAppendedEntries.map((entry) => entry.customType)).toEqual([
+			"hutao_revert_preview",
+			"hutao_revert",
+		]);
+		expect(commandAppendedEntries[0].data).toMatchObject({
+			edit_id: editId,
+			reverse_patch_check: "ok",
+			related_edits: [editId],
+		});
+		expect(commandAppendedEntries[1].data).toMatchObject({
+			edit_id: editId,
+			status: "completed",
+		});
+		expect((commandAppendedEntries[1].data as { revert_event_id?: string }).revert_event_id).toMatch(/^er_/);
+		expect((commandAppendedEntries[1].data as { revert_edit_id?: string }).revert_edit_id).toMatch(/^e_/);
+		const eventsAfter = readSessionEvents(repo, recorder.getSessionId());
+		expect(eventsAfter.some((event) => event.type === "hutao_revert_preview")).toBe(false);
+		expect(eventsAfter.filter((event) => event.type === "edit")).toHaveLength(
+			eventsBefore.filter((event) => event.type === "edit").length + 1,
+		);
+		expect(eventsAfter.some((event) => event.type === "edit_reverted")).toBe(true);
+	});
+
 	it("shows run details, action menus, merge wizard, and commit graph", async () => {
 		const repo = makeTempDir();
 		const git = await initRepo(repo);
@@ -427,6 +462,7 @@ describe("Hutao integration safety", () => {
 		await mergeCommand(`session ${recorder.getSessionId()} --wizard`, makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("Hutao merge wizard");
 		expect(commandNotifications.at(-1)).toContain("Merge preview only");
+		expect(commandAppendedEntries).toHaveLength(0);
 		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_wizard_target");
 		new EventStore(repo, "sess_wizard_target").init(targetMetadata);
 		new EventStore(repo, "sess_wizard_target").append({
@@ -449,6 +485,11 @@ describe("Hutao integration safety", () => {
 		await mergeCommand(`session ${recorder.getSessionId()} --wizard`, makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("Skipped conflicting edits");
 		expect(commandNotifications.at(-1)).toContain("continued");
+		expect(commandAppendedEntries.map((entry) => entry.customType)).toEqual(["hutao_merge", "hutao_merge"]);
+		expect(commandAppendedEntries[0].data).toMatchObject({ mode: "skip", skipped_edits: [editId] });
+		expect(commandAppendedEntries[1].data).toMatchObject({ mode: "apply_edits", skipped_edits: [editId] });
+		expect((commandAppendedEntries[0].data as { merge_ids?: string[] }).merge_ids?.[0]).toMatch(/^m_/);
+		expect((commandAppendedEntries[1].data as { merge_ids?: string[] }).merge_ids?.[0]).toMatch(/^m_/);
 	});
 
 	it("drives common Hutao workflows from menu-first commands", async () => {

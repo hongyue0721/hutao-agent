@@ -14,6 +14,7 @@ export interface MergeResult {
 	ok: boolean;
 	mode: MergeMode;
 	message: string;
+	mergeIds: string[];
 	appliedEdits: string[];
 	skippedEdits: string[];
 	conflictEdits: string[];
@@ -77,6 +78,7 @@ export class MergeManager {
 			ok,
 			mode,
 			message,
+			mergeIds: [],
 			appliedEdits: [],
 			skippedEdits: [],
 			conflictEdits: [],
@@ -86,24 +88,17 @@ export class MergeManager {
 	}
 
 	private abort(targetSession: string, sourceSession: string, changedFiles: string[]): MergeResult {
-		new EventStore(this.repoRoot, targetSession).append({
-			schema_version: HUTAO_SCHEMA_VERSION,
-			type: "merge",
-			id: createHutaoId("m"),
-			session_id: targetSession,
-			source_session: sourceSession,
-			target_session: targetSession,
-			mode: "abort",
-			status: "aborted",
-			imported_edits: [],
-			applied_edits: [],
-			conflict_edits: [],
-			skipped_edits: [],
-			resolution_edits: [],
-			created_at: new Date().toISOString(),
+		const mergeId = this.writeMergeEvent(targetSession, sourceSession, "abort", "aborted", {
+			importedEdits: [],
+			appliedEdits: [],
+			conflictEdits: [],
+			skippedEdits: [],
+			resolutionEdits: [],
 		});
-		rebuildIndex(this.repoRoot);
-		return this.empty("abort", "Merge aborted. No code changes were applied by Hutao.", true, changedFiles);
+		return {
+			...this.empty("abort", "Merge aborted. No code changes were applied by Hutao.", true, changedFiles),
+			mergeIds: [mergeId],
+		};
 	}
 
 	async captureResolutionEdit(targetSession: string, sourceSession: string): Promise<MergeResult> {
@@ -133,7 +128,7 @@ export class MergeManager {
 			status: "active",
 			summary: `Captured merge resolution for ${sourceSession}`,
 		});
-		this.writeMergeEvent(targetSession, sourceSession, "apply_edits", "completed", {
+		const mergeId = this.writeMergeEvent(targetSession, sourceSession, "apply_edits", "completed", {
 			importedEdits: [],
 			appliedEdits: [],
 			skippedEdits: [],
@@ -146,6 +141,7 @@ export class MergeManager {
 			ok: true,
 			mode: "apply_edits",
 			message: "Captured merge resolution edit.",
+			mergeIds: [mergeId],
 			appliedEdits: [],
 			skippedEdits: [],
 			conflictEdits: [],
@@ -173,7 +169,7 @@ export class MergeManager {
 			stringValue(conflict.target_session) ?? sessions.find((session) => session.id !== source.id)?.id;
 		if (!targetSession) return this.empty("apply_edits", "No target session found for skip event.", false);
 		const skipped = stringArray(conflict.conflict_edits);
-		this.writeMergeEvent(targetSession, source.id, "apply_edits", "completed", {
+		const mergeId = this.writeMergeEvent(targetSession, source.id, "apply_edits", "completed", {
 			importedEdits: stringArray(conflict.imported_edits),
 			appliedEdits: [],
 			skippedEdits: skipped,
@@ -186,6 +182,7 @@ export class MergeManager {
 			ok: true,
 			mode: "apply_edits",
 			message: "Skipped conflicting edits. No code changes were applied by skip.",
+			mergeIds: [mergeId],
 			appliedEdits: [],
 			skippedEdits: skipped,
 			conflictEdits: [],
@@ -201,25 +198,19 @@ export class MergeManager {
 		sourceEdits: HutaoEvent[],
 		changedFiles: string[],
 	): MergeResult {
-		new EventStore(this.repoRoot, targetSession).append({
-			schema_version: HUTAO_SCHEMA_VERSION,
-			type: "merge",
-			id: createHutaoId("m"),
-			session_id: targetSession,
-			source_session: sourceSession,
-			target_session: targetSession,
-			mode: "history_only",
-			status: "completed",
-			imported_promptings: sourceEvents.filter((event) => event.type === "prompting").map((event) => event.id),
-			imported_runs: sourceEvents.filter((event) => event.type === "run_finished").map((event) => event.id),
-			imported_edits: sourceEdits.map((event) => event.id),
-			applied_edits: [],
-			conflict_edits: [],
-			resolution_edits: [],
-			created_at: new Date().toISOString(),
+		const mergeId = this.writeMergeEvent(targetSession, sourceSession, "history_only", "completed", {
+			importedEdits: sourceEdits.map((event) => event.id),
+			appliedEdits: [],
+			skippedEdits: [],
+			conflictEdits: [],
+			resolutionEdits: [],
+			importedPromptings: sourceEvents.filter((event) => event.type === "prompting").map((event) => event.id),
+			importedRuns: sourceEvents.filter((event) => event.type === "run_finished").map((event) => event.id),
 		});
-		rebuildIndex(this.repoRoot);
-		return this.empty("history_only", "History imported. No code changes were applied.", true, changedFiles);
+		return {
+			...this.empty("history_only", "History imported. No code changes were applied.", true, changedFiles),
+			mergeIds: [mergeId],
+		};
 	}
 
 	private async applyEdits(
@@ -260,7 +251,7 @@ export class MergeManager {
 			}
 			applied.push(String(edit.id));
 		}
-		this.writeMergeEvent(targetSession, sourceSession, "apply_edits", conflicts.length ? "conflict" : "completed", {
+		const mergeId = this.writeMergeEvent(targetSession, sourceSession, "apply_edits", conflicts.length ? "conflict" : "completed", {
 			importedEdits: sourceEdits.map((event) => event.id),
 			appliedEdits: applied,
 			skippedEdits: skipped,
@@ -273,6 +264,7 @@ export class MergeManager {
 			ok: conflicts.length === 0,
 			mode: "apply_edits",
 			message: conflicts.length ? "Merge stopped at conflicting edit." : "Applied source edits.",
+			mergeIds: [mergeId],
 			appliedEdits: applied,
 			skippedEdits: skipped,
 			conflictEdits: conflicts,
@@ -296,7 +288,7 @@ export class MergeManager {
 		if (!check.ok) {
 			const reverseCheck = await this.git.applyReversePatchText(finalDiff);
 			if (reverseCheck.ok) {
-				this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "completed", {
+				const mergeId = this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "completed", {
 					importedEdits: sourceEdits.map((event) => event.id),
 					appliedEdits: [],
 					skippedEdits: sourceEdits.map((event) => String(event.id)),
@@ -309,6 +301,7 @@ export class MergeManager {
 					ok: true,
 					mode: "apply_tree",
 					message: "Source final snapshot is already present. No code changes were applied.",
+					mergeIds: [mergeId],
 					appliedEdits: [],
 					skippedEdits: sourceEdits.map((event) => String(event.id)),
 					conflictEdits: [],
@@ -316,7 +309,7 @@ export class MergeManager {
 					changedFiles,
 				};
 			}
-			this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "conflict", {
+			const mergeId = this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "conflict", {
 				importedEdits: sourceEdits.map((event) => event.id),
 				appliedEdits: [],
 				skippedEdits: [],
@@ -325,7 +318,10 @@ export class MergeManager {
 				beforeTree,
 				afterTree: await this.git.getTree(),
 			});
-			return this.empty("apply_tree", check.stderr || check.stdout || "Apply-tree failed.", false, changedFiles);
+			return {
+				...this.empty("apply_tree", check.stderr || check.stdout || "Apply-tree failed.", false, changedFiles),
+				mergeIds: [mergeId],
+			};
 		}
 		const patchStore = new PatchStore(join(this.repoRoot, ".hutao", "sessions", targetSession));
 		const mergeEditId = createHutaoId("e");
@@ -350,7 +346,7 @@ export class MergeManager {
 			status: "active",
 			summary: `Applied final snapshot from ${sourceSession}`,
 		});
-		this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "completed", {
+		const mergeId = this.writeMergeEvent(targetSession, sourceSession, "apply_tree", "completed", {
 			importedEdits: sourceEdits.map((event) => event.id),
 			appliedEdits: [],
 			skippedEdits: [],
@@ -363,6 +359,7 @@ export class MergeManager {
 			ok: true,
 			mode: "apply_tree",
 			message: "Applied source final snapshot.",
+			mergeIds: [mergeId],
 			appliedEdits: [],
 			skippedEdits: [],
 			conflictEdits: [],
@@ -399,7 +396,7 @@ export class MergeManager {
 	private writeMergeEvent(
 		targetSession: string,
 		sourceSession: string,
-		mode: "apply_edits" | "apply_tree" | "abort",
+		mode: "history_only" | "apply_edits" | "apply_tree" | "abort",
 		status: "completed" | "conflict" | "aborted",
 		data: {
 			importedEdits: unknown[];
@@ -407,19 +404,24 @@ export class MergeManager {
 			skippedEdits: string[];
 			conflictEdits: string[];
 			resolutionEdits: string[];
+			importedPromptings?: unknown[];
+			importedRuns?: unknown[];
 			beforeTree?: string;
 			afterTree?: string;
 		},
-	): void {
+	): string {
+		const id = createHutaoId("m");
 		new EventStore(this.repoRoot, targetSession).append({
 			schema_version: HUTAO_SCHEMA_VERSION,
 			type: "merge",
-			id: createHutaoId("m"),
+			id,
 			session_id: targetSession,
 			source_session: sourceSession,
 			target_session: targetSession,
 			mode,
 			status,
+			imported_promptings: data.importedPromptings,
+			imported_runs: data.importedRuns,
 			imported_edits: data.importedEdits,
 			applied_edits: data.appliedEdits,
 			conflict_edits: data.conflictEdits,
@@ -430,5 +432,6 @@ export class MergeManager {
 			created_at: new Date().toISOString(),
 		});
 		rebuildIndex(this.repoRoot);
+		return id;
 	}
 }

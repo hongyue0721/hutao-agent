@@ -13,7 +13,7 @@ import { ModelRegistry } from "./model-registry.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
-import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
+import { getDefaultSessionDir, getRepoLocalSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import { isInstallTelemetryEnabled } from "./telemetry.ts";
 import { time } from "./timings.ts";
@@ -73,7 +73,7 @@ export interface CreateAgentSessionOptions {
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
 
-	/** Session manager. Default: SessionManager.create(cwd) */
+	/** Session manager. Default: repo-local `.hutao/sessions` inside Git repos, else agentDir sessions. */
 	sessionManager?: SessionManager;
 
 	/** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
@@ -213,7 +213,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
+	const sessionDir = getRepoLocalSessionDir(cwd) ?? getDefaultSessionDir(cwd, agentDir);
+	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, sessionDir);
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
