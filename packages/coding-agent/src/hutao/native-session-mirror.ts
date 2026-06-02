@@ -55,8 +55,7 @@ function sanitizeRepoLocalText(text: string, repoRoot: string): string {
 		);
 	}
 	result = result.replace(/[A-Za-z]:[\\/][^\s"'`<>)]*/g, "[external-path-redacted]");
-	result = result.replace(/(?:^|\s)\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/g, (match) => {
-		const prefix = match.startsWith(" ") ? " " : "";
+	result = result.replace(/(^|[\s("'])\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/g, (match, prefix) => {
 		return `${prefix}[external-path-redacted]`;
 	});
 	return redactSecrets(result);

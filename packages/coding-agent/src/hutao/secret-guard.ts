@@ -1,5 +1,6 @@
 const PRIVATE_KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 const TOKEN_PATTERN = /\b(?:sk-[A-Za-z0-9_-]{20,}|(?:sk-ant|sk-proj|ghp|github_pat)_[A-Za-z0-9_-]{16,})\b/g;
+const MASKED_TOKEN_PATTERN = /(?:ghp|gho|github_pat|sk-ant|sk-proj)_[A-Za-z0-9_*_-]{8,}/g;
 
 const DEFAULT_IGNORED_PATHS = [
 	".env",
@@ -25,7 +26,10 @@ export function isProtectedRepoPath(path: string): boolean {
 }
 
 export function redactSecrets(text: string): string {
-	return text.replace(PRIVATE_KEY_PATTERN, "[private-key-redacted]").replace(TOKEN_PATTERN, "[secret-redacted]");
+	return text
+		.replace(PRIVATE_KEY_PATTERN, "[private-key-redacted]")
+		.replace(TOKEN_PATTERN, "[secret-redacted]")
+		.replace(MASKED_TOKEN_PATTERN, "[secret-redacted]");
 }
 
 export interface SanitizedText {

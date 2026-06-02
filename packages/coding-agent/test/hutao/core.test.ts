@@ -85,7 +85,7 @@ describe("NativeSessionMirror", () => {
 
 		const secondEntryId = nativeSession.appendMessage({
 			role: "assistant",
-			content: "done",
+			content: "done from (/home/hongyue/.config/gh/hosts.yml) with masked gho_************************************",
 			timestamp: Date.now(),
 		});
 		const secondEntry = nativeSession.getEntry(secondEntryId)!;
@@ -93,6 +93,10 @@ describe("NativeSessionMirror", () => {
 		mirrorNativeSessionEntry(snapshotFromSessionManager(repo, traceSessionId, nativeSession), secondEntry);
 		mirrored = readMirroredNativeSession(repo, traceSessionId);
 		expect(mirrored.filter((entry) => entry.type !== "session")).toHaveLength(2);
+		const mirroredText = JSON.stringify(mirrored);
+		expect(mirroredText).toContain("[external-path-redacted]");
+		expect(mirroredText).not.toContain("/home/hongyue");
+		expect(mirroredText).not.toContain("gho_");
 		expect(
 			mirrored
 				.filter((entry) => entry.type !== "session")
