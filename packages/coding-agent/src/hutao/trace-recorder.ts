@@ -86,7 +86,8 @@ function getNativeCustomType(entry: SessionEntry): string | undefined {
 }
 
 function getNativeCustomData(entry: SessionEntry): Record<string, unknown> {
-	if (entry.type === "custom" && entry.data && typeof entry.data === "object") return entry.data as Record<string, unknown>;
+	if (entry.type === "custom" && entry.data && typeof entry.data === "object")
+		return entry.data as Record<string, unknown>;
 	if (entry.type === "custom_message" && entry.details && typeof entry.details === "object") {
 		return entry.details as Record<string, unknown>;
 	}

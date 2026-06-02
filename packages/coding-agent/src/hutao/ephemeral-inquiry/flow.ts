@@ -79,7 +79,11 @@ function renderTargetEvidence(target: HutaoProcessActionTarget, event: HutaoEven
 	return lines.join("\n");
 }
 
-function buildInquiryContent(target: HutaoProcessActionTarget, event: HutaoEvent | undefined, question: string): string {
+function buildInquiryContent(
+	target: HutaoProcessActionTarget,
+	event: HutaoEvent | undefined,
+	question: string,
+): string {
 	return [
 		"<hutao_ephemeral_read_only_inquiry>",
 		"This is an ephemeral read-only inquiry about Hutao trace history.",
@@ -99,7 +103,10 @@ function buildInquiryContent(target: HutaoProcessActionTarget, event: HutaoEvent
 	].join("\n");
 }
 
-function targetDetails(target: HutaoProcessActionTarget, event: HutaoEvent | undefined): EphemeralInquiryDetails["target"] {
+function targetDetails(
+	target: HutaoProcessActionTarget,
+	event: HutaoEvent | undefined,
+): EphemeralInquiryDetails["target"] {
 	return {
 		kind: target.kind,
 		id: target.id,

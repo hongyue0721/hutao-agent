@@ -75,7 +75,9 @@ export function sanitizeGitBranchNamePart(value: string): string {
 		.slice(0, 80);
 }
 
-export function defaultForkBranchName(request: Pick<GitBranchPolicyRequest, "forkSessionId" | "sourceType" | "sourceId">): string {
+export function defaultForkBranchName(
+	request: Pick<GitBranchPolicyRequest, "forkSessionId" | "sourceType" | "sourceId">,
+): string {
 	const source = sanitizeGitBranchNamePart(`${request.sourceType}-${request.sourceId.slice(0, 12)}`) || "history";
 	const session = sanitizeGitBranchNamePart(request.forkSessionId.slice(0, 20)) || "fork";
 	return `hutao/${session}-${source}`;

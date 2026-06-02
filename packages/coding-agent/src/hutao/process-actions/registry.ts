@@ -1,10 +1,6 @@
-import type {
-	HutaoProcessAction,
-	HutaoProcessActionRegistration,
-	HutaoProcessActionRegistryContext,
-} from "./types.ts";
 import type { TranslationKey } from "../i18n.ts";
 import type { HutaoProcessTreeNode, HutaoProcessTreeNodeKind } from "../process-tree/types.ts";
+import type { HutaoProcessAction, HutaoProcessActionRegistration, HutaoProcessActionRegistryContext } from "./types.ts";
 
 export class HutaoProcessActionRegistry {
 	private readonly registrations = new Map<HutaoProcessTreeNodeKind, HutaoProcessActionRegistration>();

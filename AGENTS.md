@@ -5274,3 +5274,866 @@ git diff --check
 ```text
 repo-local native conversation timeline 与 hydration 文本不仅展示 prompting/run/edit/tool_call links，也展示 merge/revert fact links，方便用户从原生聊天上下文跳回 Hutao merge/revert facts。
 ```
+
+---
+
+## 47. Documentation status refresh / 2026-06-02
+
+This checkpoint reconciles the older handoff notes with the current audited implementation state. It does not change the product rules above; it clarifies what is currently complete, partially complete, and still pending so the next agent does not chase already-resolved resume bugs or prematurely start real subagent runtime work.
+
+### 47.1 Current validated state
+
+The current worktree has passed the full validation chain on both Windows and WSL after the Vitest 4.1.0 dependency upgrade.
+
+Windows validation passed:
+
+```bash
+npm run check
+npm test --workspaces --if-present
+npm --prefix packages/agent run coverage:harness
+npm run build
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/session-dir-policy.test.ts test/hutao/subagent-read-model.test.ts test/sdk-session-manager.test.ts test/session-manager/file-operations.test.ts
+npm audit --json --registry=https://registry.npmjs.org
+git diff --check
+```
+
+WSL validation passed with a native Linux Node v24.15.0 installed under `/tmp/hutao-node-v24.15.0` for the test run:
+
+```bash
+npm run check
+npm run build
+npm test --workspaces --if-present
+npm --prefix packages/agent run coverage:harness
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/session-dir-policy.test.ts test/hutao/subagent-read-model.test.ts test/sdk-session-manager.test.ts test/session-manager/file-operations.test.ts
+npm audit --json --registry=https://registry.npmjs.org
+git diff --check
+```
+
+WSL note:
+
+```text
+In a clean WSL copy where dist/ is excluded, run build before workspace tests. Workspace package exports resolve built dist entries such as @earendil-works/pi-ai and @earendil-works/pi-tui.
+```
+
+Security/dependency note:
+
+```text
+vitest and @vitest/coverage-v8 were upgraded from 3.2.4 to 4.1.0.
+The project .npmrc supply-chain policy has min-release-age=2, so the repair used the minimum safe version that clears the audit under policy instead of bypassing policy for a newer patch.
+Current npm audit reports 0 vulnerabilities.
+```
+
+### 47.2 Current accurate completion boundary
+
+Implemented and verified enough to treat as current foundation:
+
+```text
+1. Repo-local native sessions under .hutao/sessions/<id>/native-session.jsonl.
+2. sess_<id> normal session ids and fs_<id> fork/native branch ids.
+3. cwd stored as "." in repo-local native session headers.
+4. ${REPO} path sanitization on disk and hydration to the current clone path on open.
+5. Repo-local-aware resume/session listing.
+6. repo-local native > raw-only Hutao history > legacy global ordering in listForResume and threaded resume picker.
+7. Plain hutao startup does not create a persisted conversation merely by opening the TUI.
+8. Existing repo-local history is advertised through /resume or /session instead of forced auto-resume.
+9. Explicit /fork and prompting/edit action-menu fork paths use HutaoForkCoordinator.
+10. Armed historical continuation is handled before normal prompt persistence.
+11. Native branch and Hutao forkSession metadata share one coordinator-generated fs_<id> for explicit forks.
+12. Menu-first workflows exist for common session/prompting/edit/run/git/fork/merge operations.
+13. ConversationStore / ConversationRenderer / ConversationHydrator provide a usable conversation timeline and hydration MVP.
+14. /session <id> --conversation, --hydrate-preview, and --hydrate exist.
+15. raw-only histories are degraded evidence and are not fabricated into full native chat.
+16. Merge/revert native custom entries link back to canonical Hutao facts.
+17. Revert edits write reverse patches and patch hashes.
+18. apply-edits and apply-tree merge modes exist with preview/confirmation paths.
+19. Phase 1 process-tree architecture split exists under packages/coding-agent/src/hutao/process-tree/.
+20. Phase 2 trace-relations helper layer exists.
+21. Phase 3 subagent trace/read/view domain extraction exists under packages/coding-agent/src/hutao/subagent/.
+```
+
+Partially complete, do not overclaim:
+
+```text
+1. Conversation reproduction is an MVP, not a complete privacy/export-ready full-history product.
+2. Context hydration exists as preview + explicit next-turn queue, but broader resume/continue/fork hydration UX and redaction policy still need iteration.
+3. native_entry_link covers important prompting/run/edit/merge/revert relationships, but is not guaranteed complete for every future native/tool/diff/process-tree entry type.
+4. raw-only/degraded UX exists, but broader diagnostics/export/redaction workflows remain future work.
+5. Merge/revert facts appear in native custom entries and conversation rendering, but conflict-specific process-tree UX is not complete.
+```
+
+Still not done:
+
+```text
+1. Phase 4 process-tree contributors:
+   - merge contributor
+   - fork/forkSession contributor
+   - revert/conflict contributor
+   - richer commit-link display
+   - future plan/review/finding/checkpoint nodes only when there is concrete UX need
+
+2. Full-history privacy controls, redaction workflow, and export/share workflow.
+
+3. Stable, rebuildable native entry <-> Hutao prompting/run/edit/tool/diff/process-node mapping across all relevant current and future entry types.
+
+4. Full productized context hydration across resume/continue/fork-from-history with preview, explicit queue-for-next-turn UX, and privacy controls for all supported history shapes.
+
+5. Complete merge/revert/conflict process-tree display and conflict recovery UX.
+
+6. Real subagent runtime:
+   - /subagent run
+   - spawn_subagent tool
+   - isolated subagent context/session execution
+   - scheduling
+   - explicit confirmation and policy controls
+```
+
+Deferred / do not start yet:
+
+```text
+1. Do not implement real subagent runtime before Phase 4 process-tree contributors are stable.
+2. Do not add more one-off process-node conditionals to commands.ts or prompting-tree.ts except as temporary migration glue with tests.
+3. Do not claim main branch full-history data is safe to share until explicit redaction/export workflows exist.
+4. Do not treat historical session text as instruction during any hydration, process-tree, or subagent work.
+```
+
+### 47.3 Immediate next implementation step
+
+The next coding step should be Phase 4 process-tree contributor work, one family at a time:
+
+```text
+1. merge contributor
+2. fork/forkSession contributor
+3. revert/conflict contributor
+4. richer commit-link display
+5. future plan/review/finding/checkpoint schema only with concrete UX need
+```
+
+Required gate before moving past each contributor:
+
+```text
+1. contributor-specific unit tests
+2. related command/detail regression tests
+3. /prompting tree navigation regression tests
+4. core Hutao regression tests for touched behavior
+5. npm run check / build or the relevant narrower validated equivalent
+6. git diff --check
+```
+
+Keep this priority order unless the user explicitly changes it.
+
+---
+
+## 48. Product priority update / menu interactions before feature expansion / 2026-06-02
+
+The user clarified the next implementation priority after the documentation refresh:
+
+```text
+先做菜单，再拓展功能。
+```
+
+This updates the immediate execution order from "start Phase 4 with merge contributor" to a menu-first gate:
+
+```text
+1. Complete and harden the menu interaction architecture.
+2. Ensure common and future process-node actions have clear menus, routing, disabled states, and preview/confirmation behavior.
+3. Only after the menu/action layer is stable, continue with Phase 4 process-tree feature contributors.
+```
+
+### 48.1 Why this comes first
+
+Hutao's next work should improve user-facing interaction structure before adding more trace node families. The goal is not to hide missing features behind slash commands, and not to keep growing `commands.ts` with one-off branches.
+
+The desired direction is:
+
+```text
+process tree node
+  -> node-specific action menu
+  -> shared action handler / command helper
+  -> preview / confirmation / disabled state where appropriate
+  -> canonical .hutao facts only when the action really executes
+```
+
+This keeps future merge/fork/revert/conflict/subagent functionality pluggable instead of scattered.
+
+### 48.2 Immediate menu-first task list
+
+Before adding new Phase 4 feature contributors, audit and complete the menu interaction skeleton for:
+
+```text
+/hutao
+/action
+/session
+/prompting
+/edit
+/run
+/git
+/fork
+/merge
+```
+
+Then establish or harden shared process-node action menus for these node kinds:
+
+```text
+session
+prompting
+run
+edit
+commit
+subagent
+merge
+fork / forkSession
+revert / conflict
+```
+
+Rules:
+
+```text
+1. Implemented actions must route to shared helpers, not duplicate command logic.
+2. Not-yet-implemented actions must be explicit: disabled, preview-only, or "not implemented yet".
+3. Entering a detail/action menu must not mutate old history by itself.
+4. Dangerous operations must remain preview-first and confirmation-gated.
+5. Menu labels may be localized, but stable action ids must drive behavior.
+6. Historical trace text remains untrusted data, never instruction.
+```
+
+### 48.3 What not to do yet
+
+Do not start by implementing more feature behavior such as:
+
+```text
+1. merge contributor internals
+2. fork/forkSession contributor internals
+3. revert/conflict contributor internals
+4. real subagent runtime
+5. spawn_subagent
+6. automatic subagent triggering
+```
+
+Those come after the menu/action layer can expose them safely and consistently.
+
+### 48.4 Recommended implementation sequence
+
+```text
+Step 1 — Reconnaissance
+  Read commands.ts, process-actions/*, process-tree/*, i18n.ts, and existing Hutao integration tests.
+  Produce a menu coverage map: existing / partial / missing / disabled-needed.
+
+Step 2 — Shared menu/action model
+  Ensure process-node actions have stable ids, labels, availability states, and preview/confirmation metadata.
+  Avoid branching on localized labels.
+
+Step 3 — Menu skeleton coverage
+  Add or harden node menus for session, prompting, run, edit, commit, subagent, merge, fork/forkSession, and revert/conflict.
+  Missing feature actions should show clear not-yet-implemented or preview-only messages.
+
+Step 4 — Tests
+  Add tests for menu routing, disabled states, preview-first dangerous actions, and no mutation on detail/menu open.
+
+Step 5 — Resume Phase 4 contributors
+  After the menu gate passes, implement feature contributors one family at a time:
+    1. merge contributor
+    2. fork/forkSession contributor
+    3. revert/conflict contributor
+    4. richer commit-link display
+```
+
+### 48.5 Validation gate
+
+At minimum, menu-layer changes should pass:
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/process-actions.test.ts test/hutao/integration.test.ts test/hutao/process-tree-relations.test.ts
+npm --prefix packages/coding-agent run build
+git diff --check
+```
+
+If the work touches shared command/session/fork/merge/revert behavior, also run the broader Hutao focused set before moving on.
+
+---
+
+## 49. Phase 4 process-tree contributors: merge/fork/revert/conflict landed / 2026-06-02
+
+This section supersedes the immediate next-step guidance in sections 47 and 48. The menu-first gate has now been used to add the first Phase 4 contributor families. Do not read sections 47/48 as saying merge/fork/revert/conflict contributors are still unstarted.
+
+### 49.1 What changed
+
+Implemented and focused-test verified:
+
+```text
+1. Shared process-action routing for revert and conflict nodes is no longer future-only.
+2. Merge events are represented by merge contributor nodes with contextual source/target session and edit relation children.
+3. fork_session events are represented by fork contributor nodes with contextual parent/fork session and source anchor children.
+4. edit_reverted facts are represented by revert contributor nodes with original edit and revert edit children.
+5. merge conflict state is represented by conflict contributor nodes with source/target session, merge event, conflict edit, skipped edit, and resolution edit children.
+6. Session visibility now includes merge, fork, revert, and conflict relations, not only promptings.
+7. Revert/conflict action menus now expose read-only details and relation navigation through the shared action registry/executor/handler path.
+8. Conflict capture-resolution actions route through the existing merge resolution preview/confirm flow instead of bypassing safety checks.
+```
+
+New/relevant modules:
+
+```text
+packages/coding-agent/src/hutao/process-tree/merge-model.ts
+packages/coding-agent/src/hutao/process-tree/fork-model.ts
+packages/coding-agent/src/hutao/process-tree/revert-model.ts
+packages/coding-agent/src/hutao/process-tree/conflict-model.ts
+packages/coding-agent/src/hutao/process-tree/contributors/merge-contributor.ts
+packages/coding-agent/src/hutao/process-tree/contributors/fork-contributor.ts
+packages/coding-agent/src/hutao/process-tree/contributors/revert-contributor.ts
+packages/coding-agent/src/hutao/process-tree/contributors/conflict-contributor.ts
+packages/coding-agent/src/hutao/process-actions/*
+```
+
+### 49.2 Validation added in this slice
+
+Focused coverage now includes:
+
+```text
+1. process-actions tests for implemented fork/revert/conflict menus and future-only subagent runtime state.
+2. process-tree relation tests for fork, merge, revert, and conflict contextual node shapes.
+3. integration tests for /prompting tree -> fork/merge/revert/conflict node -> action menu -> command handler dispatch.
+```
+
+Focused validation command used during implementation:
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/integration.test.ts
+```
+
+### 49.3 Still not complete / do not overclaim
+
+```text
+1. Richer commit-link display is still pending.
+2. Conflict recovery UX is not fully productized; current conflict actions safely view relations and route capture-resolution through existing merge preview/confirm paths.
+3. Full-history privacy/export/redaction remains pending.
+4. Native entry <-> every possible future process-node mapping is not guaranteed complete.
+5. Real subagent runtime remains deferred.
+6. Do not claim all merge/revert/conflict conflicts can be automatically resolved.
+```
+
+### 49.4 Next recommended work
+
+```text
+1. Run the full validation suite for this slice before handoff.
+2. Then prefer richer commit-link display as the next process-tree relation expansion.
+3. After that, improve conflict recovery UX with explicit preview, skip/resolve/abort state, and tests.
+4. Keep adding new node families through model helpers + contributors + action registry entries; do not re-centralize logic into commands.ts.
+```
+
+### Phase 4 follow-up — Richer `/git` read-only projection boundaries
+
+This section supersedes the older immediate next-step wording that only says to continue Phase 4 contributor work. Merge, fork, revert, and conflict process-tree contributors may already exist in the current working slice; the next recommended design/code slice is richer commit-link display and `/git` projection.
+
+The scope for this slice is deliberately conservative:
+
+```text
+Goal:
+  Connect existing Prompting -> Run -> Edit facts and Merge/Fork/Revert/Conflict relations
+  to the Git view, so /git can show linked Hutao trace context for commits.
+
+Non-goal:
+  Do not create a new facts layer.
+  Do not infer or fabricate AI provenance for commits without strong evidence.
+  Do not redesign merge/apply-tree semantics.
+```
+
+#### Hard boundaries for Phase 1 `/git` projection
+
+These are implementation constraints, not optional suggestions:
+
+```text
+1. Phase 1 is read-only projection only.
+   Do not change canonical event schema.
+
+2. Do not add a standalone ConflictRelation event.
+   Conflict nodes are derived relations, not new persisted facts.
+
+3. Conflict nodes must be derived only from existing merge event state,
+   such as conflict_edits, skipped_edits, resolution_edits, and conflict-like statuses.
+
+4. CommitLink is a bridge, not a code snapshot.
+   It links Git commits to Hutao facts by IDs and link metadata.
+
+5. Git commit/tree is the source of committed code snapshots.
+   Uncommitted Hutao edits are evidenced by patches, patch hashes, and worktree diffs;
+   they are not Git snapshots until linked to a commit/tree.
+
+6. confidence and relation_ids are presentation-layer calculations for Phase 1.
+   Do not write them to canonical facts such as events.jsonl, session.json, patch metadata,
+   or manifest.json. If caching is needed later, it must be rebuildable and non-canonical.
+
+7. /git must not claim AI provenance without a commit_link or strong evidence.
+   Without confirmed evidence, show no confirmed Hutao source. At most show clearly labeled
+   possible hints.
+
+8. apply_tree must currently be described as Apply Final Snapshot / snapshot-diff apply.
+   Do not describe it as a full Git tree merge, Git three-way merge, recursive merge,
+   or ort merge.
+
+9. process tree and /git are projections.
+   They are not new facts layers and must not rewrite or own trace facts.
+
+10. Any uncertain relationship must be labeled with method, confidence, and reason.
+    Do not display uncertain relations as confirmed facts.
+```
+
+#### Evidence and confidence policy
+
+For Phase 1, prefer under-attribution over false attribution.
+
+Confirmed or high-confidence sources:
+
+```text
+explicit_command
+  User or command explicitly linked Hutao facts to a commit.
+
+observed_git_commit
+  Hutao observed an agent/tool git commit and HEAD transition.
+
+manual
+  User manually selected the link.
+
+existing commit_link event
+  Canonical event already links commit to prompting/run/edit ids.
+```
+
+Allowed but must be clearly labeled as inferred:
+
+```text
+patch_match
+  Commit diff strongly matches an edit patch hash or equivalent patch evidence.
+  Suggested confidence: medium.
+```
+
+Hints only; do not use as confirmed AI provenance:
+
+```text
+file_time_hint
+same changed file
+nearby timestamp
+similar commit message
+recent active session
+```
+
+Display rule:
+
+```text
+No commit_link or strong evidence:
+  Do not say "this commit was produced by AI".
+  Do not attach a prompting as confirmed source.
+  At most show "possible related Hutao facts" with low confidence and reason.
+```
+
+#### CommitLink model reminder
+
+Correct mental model:
+
+```text
+Prompting -> Run -> Edit
+Commit <-> Prompting / Run / Edit via CommitLink
+```
+
+Incorrect mental model:
+
+```text
+Commit
+└── Prompting
+    └── Run
+        └── Edit
+```
+
+Why the incorrect model is forbidden:
+
+```text
+A commit may contain multiple promptings.
+A prompting may produce multiple commits.
+An edit may be uncommitted.
+A commit may mix human and agent edits.
+Rebase/squash/amend can change or remove commit hashes.
+```
+
+#### Merge display boundaries in process tree and `/git`
+
+Do not conflate Hutao merge events with Git merge commits.
+
+```text
+Hutao merge event:
+  A session/forkSession merge process with mode, source/target sessions,
+  imported/applied/skipped/conflict/resolution edits, and status.
+
+Git merge commit:
+  A Git commit with multiple parents in Git history.
+```
+
+Allowed relationships:
+
+```text
+Hutao merge event exists, no Git commit:
+  Example: /merge session --history.
+  Display as history import / no code changes.
+
+Hutao merge event linked to normal Git commit:
+  Example: /merge session --apply-edits followed by git commit.
+  Display related merge event under that commit, but do not call the commit a Git merge commit.
+
+Git merge commit exists, no Hutao merge event:
+  Display Git parents and say no confirmed Hutao merge event is linked.
+
+Both exist and are linked:
+  Display Git parents plus related Hutao merge event details.
+```
+
+Process tree projection should focus on process:
+
+```text
+Session
+└── Merge m_xxx
+    ├── Source session
+    ├── Target session
+    ├── Mode: history_only | apply_edits | apply_tree
+    ├── Applied edits
+    ├── Conflict edits
+    ├── Skipped edits
+    └── Resolution edits
+```
+
+`/git` projection should focus on Git result:
+
+```text
+Commit abc123
+├── Git type: normal commit | merge commit
+├── Git parents
+├── Linked promptings
+├── Runs summary
+├── Linked edits
+├── Related merge/fork/revert/conflict relations
+└── Link method / confidence / reason
+```
+
+#### Recommended implementation order for richer `/git`
+
+Implement this slice in small, testable layers:
+
+```text
+1. Read existing commit_link events and Git commit metadata.
+2. Add or improve a commit-link read model/helper.
+3. Teach /git <commit> to render linked promptings, runs summary, and edits.
+4. Compute link confidence in presentation/read-model code only.
+5. Derive related merge/fork/revert/conflict relations from already-linked facts.
+6. Keep conflict nodes derived from merge events only.
+7. Add process-action navigation for commit-linked promptings/edits/relations if needed.
+8. Add i18n strings for any new labels.
+9. Add tests for /git projection and relation display.
+10. Only after confirmed links are stable, consider conservative inferred patch_match display.
+```
+
+Do not begin with aggressive inference. The safe Phase 1 rule is:
+
+```text
+confirmed first,
+possible only when clearly labeled,
+unknown stays unknown.
+```
+
+#### Required tests for this slice
+
+At minimum, cover:
+
+```text
+/git <commit> with existing commit_link shows linked promptings/runs summary/edits.
+/git <commit> without commit_link does not claim AI provenance.
+/git for a commit linked to merge edits shows related merge event without calling it a Git merge commit unless Git has multiple parents.
+Conflict display is derived from merge event conflict/skipped/resolution fields.
+Revert display links original edit and revert edit through existing revert facts.
+confidence is computed for display and not written to events.jsonl.
+apply_tree labels use Apply Final Snapshot / snapshot-diff apply wording.
+```
+
+Regression gate:
+
+```text
+npm run build
+npm --prefix packages/coding-agent test
+npm test --workspaces --if-present
+npm --prefix packages/agent run coverage:harness
+npm audit --json --registry=https://registry.npmjs.org
+npm run check
+git diff --check
+```
+
+### Process tree UX follow-up — Collapsible `/tree` projection
+
+
+This section captures the next UX direction for Hutao process tree browsing. It is a presentation-layer follow-up, not a schema change.
+
+Goal:
+
+```text
+Make /tree and prompting-tree style views readable for large sessions by defaulting to collapsed process nodes, while preserving the existing process-tree facts and action model.
+```
+
+Target user experience:
+
+```text
+Session sess_xxx
+└── Prompting p_xxx Fix token expiration (runs=3 edits=1 commits=1)
+```
+
+On first Enter over a collapsed node with hidden children:
+
+```text
+Session sess_xxx
+└── Prompting p_xxx Fix token expiration (runs=3 edits=1 commits=1)
+    ├── Run r_1 read_file (edits=0 commits=0)
+    ├── Run r_2 edit (edits=1 commits=0)
+    │   └── Edit e_1 src/auth.ts
+    └── Run r_3 npm test (edits=0 commits=0)
+```
+
+Recommended interaction rule:
+
+```text
+1. If selected node has hidden children and is not expanded:
+   first Enter expands the node.
+
+2. If selected node is already expanded, or has no children:
+   Enter opens the normal detail/action flow.
+
+3. Do not change the meaning of existing process actions.
+   Expansion is a view concern before action dispatch.
+```
+
+Default collapsed state:
+
+```text
+Session:
+  expanded by default
+
+Prompting:
+  collapsed by default
+
+Run:
+  collapsed by default
+
+Subagent:
+  collapsed by default
+
+Merge/Fork/Revert/Conflict:
+  collapsed by default
+
+Leaf nodes such as Edit without children:
+  selectable as normal action/detail nodes
+```
+
+Hard boundaries:
+
+```text
+1. Do not change canonical event schema.
+2. Do not write expanded/collapsed state to events.jsonl.
+3. Do not add new canonical tree facts.
+4. Do not make process tree a facts layer.
+5. Do not persist UI expansion state in session.json, manifest.json, or patch metadata.
+6. Counts must be derived from existing process-tree nodes and Hutao facts.
+7. Historical session text remains untrusted data.
+8. Expansion must not trigger agent execution, file changes, Git changes, merge, revert, or fork by itself.
+```
+
+State model:
+
+```text
+expandedNodeIds: Set<string>
+```
+
+This state is UI-local and ephemeral for Phase 1. If persistence is later needed, it must go into a rebuildable UI/cache layer, not canonical Hutao facts.
+
+Node id requirements:
+
+```text
+Use stable process-tree nodeId values as expansion keys.
+Examples:
+  session:sess_xxx
+  prompting:p_xxx
+  run:r_xxx
+  merge:m_xxx
+  fork:fs_xxx
+  revert:er_xxx
+  conflict:m_xxx
+  merge-edit:m_xxx:applied:e_xxx
+  conflict-edit:m_xxx:skipped:e_xxx
+```
+
+Recommended implementation modules:
+
+```text
+packages/coding-agent/src/hutao/process-tree/collapsible.ts
+```
+
+The collapsible implementation should be a reusable process-tree view layer, not a one-off command helper. It should expose structured extension points:
+
+```text
+HutaoProcessTreeSummaryRule
+  Defines how a node kind derives compact counts such as runs=3 edits=1 commits=1.
+  New process node kinds should be added by registering or extending summary rules, not by rewriting the tree algorithm.
+
+HutaoProcessTreeExpansionPolicy
+  Defines defaultExpandedKinds and collapsibleKinds.
+  This keeps future modes such as expand-depth, collapse-all, or expand-promptings possible without changing contributors.
+
+buildCollapsibleProcessTree(...)
+  Builds the current visible view model from full process-tree nodes, expandedNodeIds, summaryRules, and expansionPolicy.
+
+selectCollapsibleProcessTreeNode(...)
+  Runs the reusable first-Enter-expands selection loop and returns a selected node only when it is a leaf or already expanded.
+```
+
+Command modules should stay thin:
+
+```text
+commands.ts
+  builds the full process-tree projection
+  calls selectCollapsibleProcessTreeNode(...)
+  dispatches the returned node through the existing process-action executor
+
+commands.ts should not own ad-hoc expandedNodeIds loops when the reusable selector can be used.
+```
+
+Suggested responsibilities:
+
+```text
+buildCollapsibleProcessTree(nodes, options)
+  Input:
+    full flattened process-tree nodes
+    expandedNodeIds
+    defaultExpandedKinds
+
+  Output:
+    visible nodes for current UI pass
+    metadata indicating whether a selected node has hidden children
+    labels with derived summary counts
+```
+
+Keep the layering clear:
+
+```text
+contributors:
+  produce full process-tree nodes from facts
+
+collapsible helper:
+  decides visible nodes and collapsed labels
+
+command loop:
+  owns ephemeral expandedNodeIds and Enter behavior
+
+action executor:
+  still owns normal node action/detail dispatch
+```
+
+Suggested command-loop behavior:
+
+```text
+while true:
+  fullNodes = buildPromptingTreeNodes(...)
+  visibleNodes = collapse(fullNodes, expandedNodeIds)
+  selected = select visible node
+
+  if selected has hidden children and selected.nodeId not in expandedNodeIds:
+      expandedNodeIds.add(selected.nodeId)
+      continue
+
+  runProcessNodeAction(selected)
+  break
+```
+
+Summary counts should be derived, not stored.
+
+Prompting label examples:
+
+```text
+Prompting p_xxx Fix auth bug (runs=3 edits=1 commits=1 subagents=0)
+```
+
+Run label examples:
+
+```text
+Run r_xxx bash npm test (edits=0 commits=0)
+Run r_yyy edit src/auth.ts (edits=1 commits=0)
+```
+
+Merge label examples:
+
+```text
+Merge m_xxx apply_edits completed (applied=2 conflicts=0 skipped=0 resolutions=1)
+Merge m_yyy apply_tree conflict (Apply Final Snapshot / snapshot-diff apply; conflicts=1 skipped=0 resolutions=0)
+```
+
+Conflict label examples:
+
+```text
+Conflict m_xxx apply_edits conflict (conflicts=1 skipped=1 resolutions=0)
+```
+
+Revert label examples:
+
+```text
+Revert er_xxx original=e_1 revert=e_2 (edits=2)
+```
+
+Fork label examples:
+
+```text
+Fork fs_xxx edit:e_1 after (sessions=2 source=1)
+```
+
+Important UX constraints:
+
+```text
+1. The first Enter expands only when the node has hidden children.
+2. The second Enter on the same expanded node opens existing action/detail flow.
+3. Empty or leaf nodes must not require a double Enter.
+4. Cancel from selection should preserve existing command behavior.
+5. The user must be able to reach the same actions as before.
+6. Expanded labels should be concise; avoid overwhelming the tree with all run details by default.
+```
+
+Testing requirements:
+
+```text
+Unit tests for collapsible helper:
+  - default sessions expanded and promptings collapsed
+  - first-level labels include derived counts
+  - expandedNodeIds reveals children
+  - leaf nodes are not marked expandable
+  - contextual relation node ids remain stable
+  - counts are derived from nodes/facts and are not written anywhere
+
+Integration tests:
+  - /prompting tree initially shows Prompting with (runs=N edits=N)
+  - selecting a collapsed Prompting first expands instead of opening action menu
+  - selecting the same expanded Prompting opens normal action menu/detail flow
+  - selecting a Run with hidden Edit children first expands
+  - selecting a leaf Edit still opens existing edit action flow
+
+Regression tests:
+  - existing process action dispatch remains unchanged
+  - merge/fork/revert/conflict relation nodes remain navigable
+  - read-only inquiry still does not write canonical facts
+```
+
+Do not implement these in the first collapsible-tree slice:
+
+```text
+Do not persist tree UI state.
+Do not add keyboard shortcuts beyond existing select/Enter flow unless required.
+Do not add schema fields for counts.
+Do not write summary counts to events.jsonl.
+Do not make the collapsed tree a separate canonical tree model.
+Do not trigger merge/revert/fork or agent execution from expansion itself.
+```
+
+Design principle:
+
+```text
+Full process tree remains the complete projection.
+Collapsible tree is only a temporary UI projection over that projection.
+Facts stay flat, views stay derived, and actions stay routed through the existing process-action executor.
+```

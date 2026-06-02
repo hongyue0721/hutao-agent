@@ -57,26 +57,35 @@ process.env[${JSON.stringify(ENV_AGENT_DIR)}] = "${agentDir}";
 
 setTheme("custom-test", true);
 
-// Find the FSWatcher among active handles
+// Find the theme FSWatcher among active handles. Prefer a watcher that already
+// has an error listener, because the regression we care about is whether the
+// theme watcher is created via watchWithErrorHandler(). Other runtime watchers
+// may also exist in newer Node/Vitest environments.
+const lineBreak = String.fromCharCode(10);
 const handles = (process as any)._getActiveHandles();
-const fsWatcher = handles.find((h: any) => h.constructor?.name === "FSWatcher");
+const fsWatchers = handles.filter((h: any) => h.constructor?.name === "FSWatcher");
+const fsWatcher = fsWatchers.find((h: any) => h.listenerCount("error") > 0) ?? fsWatchers[0];
 
 if (!fsWatcher) {
-	process.stderr.write("no FSWatcher found among active handles\\n");
+	process.stderr.write("no FSWatcher found among active handles" + lineBreak);
 	process.exit(2);
 }
 
 const errorListenerCount = fsWatcher.listenerCount("error");
+process.stderr.write(
+	"FSWatcher count=" + fsWatchers.length + "; selected error listeners=" + errorListenerCount + lineBreak,
+);
 if (errorListenerCount === 0) {
-	process.stderr.write("BUG: FSWatcher has no error handler (issue #2791)\\n");
+	process.stderr.write("BUG: selected FSWatcher has no error handler (issue #2791)" + lineBreak);
 }
 
 // Emitting 'error' on an EventEmitter with no error listener throws.
 // This simulates an async OS error (e.g. ReadDirectoryChangesW invalidation).
 try {
 	fsWatcher.emit("error", new Error("simulated OS watcher failure"));
-} catch {
-	process.stderr.write("error event was unhandled and threw\\n");
+} catch (error) {
+	const message = error instanceof Error ? error.message : String(error);
+	process.stderr.write("error event was unhandled and threw: " + message + lineBreak);
 	process.exit(1);
 }
 

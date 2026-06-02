@@ -1,6 +1,16 @@
 import type { HutaoEvent, HutaoSessionMetadata } from "../event-store.ts";
 
-export type HutaoProcessTreeNodeKind = "session" | "prompting" | "subagent" | "run" | "edit" | "commit" | "merge";
+export type HutaoProcessTreeNodeKind =
+	| "session"
+	| "prompting"
+	| "subagent"
+	| "run"
+	| "edit"
+	| "commit"
+	| "merge"
+	| "fork"
+	| "revert"
+	| "conflict";
 
 export interface HutaoProcessTreeNode {
 	kind: HutaoProcessTreeNodeKind;

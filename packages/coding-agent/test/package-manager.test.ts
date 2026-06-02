@@ -1104,13 +1104,11 @@ Content`,
 		it("should emit progress events on install attempt", async () => {
 			const events: ProgressEvent[] = [];
 			packageManager.setProgressCallback((event) => events.push(event));
+			vi.spyOn(packageManager as unknown as PackageManagerInternals, "runCommand").mockRejectedValue(
+				new Error("mock install failed"),
+			);
 
-			// Use public install method which emits progress events
-			try {
-				await packageManager.install("npm:nonexistent-package@1.0.0");
-			} catch {
-				// Expected to fail - package doesn't exist
-			}
+			await expect(packageManager.install("npm:nonexistent-package@1.0.0")).rejects.toThrow("mock install failed");
 
 			// Should have emitted start event before failure
 			expect(events.some((e) => e.type === "start" && e.action === "install")).toBe(true);

@@ -547,7 +547,7 @@ describe("ConversationStore", () => {
 		await recorder.recordNativeEntryLink(nativeSession.getEntry(olderEntryId)!);
 		const secretEntryId = nativeSession.appendMessage({
 			role: "user",
-			content: "old sk-" + "x".repeat(48),
+			content: ["old sk-", "x".repeat(48)].join(""),
 			timestamp: Date.now(),
 		});
 		await recorder.recordNativeEntryLink(nativeSession.getEntry(secretEntryId)!);
@@ -867,7 +867,9 @@ describe("RevertManager", () => {
 		const revertEdit = events.find((event) => event.type === "edit" && event.id === result.revertEditId)!;
 		expect(revertEdit.patch).toBe(`patches/${result.revertEditId}.patch`);
 		expect(String(revertEdit.patch_hash)).toMatch(/^sha256:/);
-		expect(existsSync(join(repo, ".hutao", "sessions", recorder.getSessionId(), String(revertEdit.patch)))).toBe(true);
+		expect(existsSync(join(repo, ".hutao", "sessions", recorder.getSessionId(), String(revertEdit.patch)))).toBe(
+			true,
+		);
 		const reverted = events.find((event) => event.type === "edit_reverted" && event.id === result.revertEventId)!;
 		expect(reverted.revert_edit_id).toBe(result.revertEditId);
 	});

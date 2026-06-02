@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { HutaoEvent, HutaoSessionMetadata } from "../../src/hutao/event-store.ts";
 import { flattenNodes } from "../../src/hutao/process-tree/builder.ts";
+import { commitContributor } from "../../src/hutao/process-tree/contributors/commit-contributor.ts";
+import { conflictContributor } from "../../src/hutao/process-tree/contributors/conflict-contributor.ts";
+import { forkContributor } from "../../src/hutao/process-tree/contributors/fork-contributor.ts";
+import { mergeContributor } from "../../src/hutao/process-tree/contributors/merge-contributor.ts";
+import { promptingContributor } from "../../src/hutao/process-tree/contributors/prompting-contributor.ts";
+import { revertContributor } from "../../src/hutao/process-tree/contributors/revert-contributor.ts";
+import { sessionContributor } from "../../src/hutao/process-tree/contributors/session-contributor.ts";
 import type { HutaoProcessTreeBuildContext } from "../../src/hutao/process-tree/types.ts";
 import {
 	getCommitLinkedIds,
@@ -80,28 +87,241 @@ describe("Hutao process tree", () => {
 		expect(nodes[3].label).toBe("│  │  └─ Edit e_1");
 	});
 
-	it("allows independent contributors to compose without hard-coded node kinds", () => {
+	it("adds fork sessions and contextual source nodes through reusable contributors", () => {
+		const parentSession: HutaoSessionMetadata = {
+			...session,
+			id: "sess_parent",
+			title: "parent",
+		};
+		const forkSession: HutaoSessionMetadata = {
+			...session,
+			id: "fs_child",
+			kind: "forkSession",
+			title: "child fork",
+			parent_session: "sess_parent",
+			fork_from: { type: "edit", id: "e_anchor", mode: "after" },
+		};
+		const events: HutaoEvent[] = [
+			event("prompting", "p_parent", { session_id: "sess_parent", text: "parent work" }),
+			event("edit", "e_anchor", { session_id: "sess_parent", files: ["src/anchor.ts"], summary: "anchor edit" }),
+			event("fork_session", "fs_child", {
+				session_id: "fs_child",
+				parent_session: "sess_parent",
+				fork_from_type: "edit",
+				fork_from_id: "e_anchor",
+				fork_mode: "after",
+				base_git_head: "abc123",
+				base_tree: "tree_after_anchor",
+			}),
+		];
 		const context: HutaoProcessTreeBuildContext = {
 			repoRoot: "/repo",
-			events: [],
-			promptings: [],
-			sessions: [session],
-		};
-		const contributor = {
-			kind: "test",
-			collect: (ctx: HutaoProcessTreeBuildContext) => [
-				{
-					kind: "merge" as const,
-					id: ctx.sessions[0].id,
-					label: "Merge synthetic",
-					depth: 0,
-					nodeId: "merge:synthetic",
-					order: 0,
-				},
-			],
+			events,
+			promptings: events.filter((entry) => entry.type === "prompting"),
+			sessions: [parentSession, forkSession],
 		};
 
-		expect(contributor.collect(context)[0]).toMatchObject({ kind: "merge", id: "sess_test" });
+		const nodes = flattenNodes([...sessionContributor.collect(context), ...forkContributor.collect(context)]);
+
+		expect(nodes.map((node) => `${node.kind}:${node.id}:${node.nodeId}`)).toEqual([
+			"session:sess_parent:session:sess_parent",
+			"fork:fs_child:fork:fs_child",
+			"session:sess_parent:fork-session:fs_child:parent:sess_parent",
+			"session:fs_child:fork-session:fs_child:fork:fs_child",
+			"edit:e_anchor:fork-source:fs_child:edit:e_anchor",
+			"session:fs_child:session:fs_child",
+		]);
+		expect(nodes.find((node) => node.nodeId === "session:sess_parent")?.label).toContain("forks=1");
+		expect(nodes.find((node) => node.nodeId === "fork:fs_child")?.label).toContain("edit:e_anchor");
+		expect(nodes.find((node) => node.nodeId === "fork-source:fs_child:edit:e_anchor")?.label).toContain(
+			"Source edit",
+		);
+	});
+
+	it("adds revert events and contextual edit nodes through reusable contributors", () => {
+		const events: HutaoEvent[] = [
+			event("prompting", "p_revert", { session_id: "sess_test", text: "revert work" }),
+			event("edit", "e_original", { session_id: "sess_test", files: ["src/original.ts"] }),
+			event("edit", "e_revert", { session_id: "sess_test", files: ["src/original.ts"], reverts_edit: "e_original" }),
+			event("edit_reverted", "er_1", {
+				session_id: "sess_test",
+				edit_id: "e_original",
+				revert_edit_id: "e_revert",
+			}),
+		];
+		const context: HutaoProcessTreeBuildContext = {
+			repoRoot: "/repo",
+			events,
+			promptings: events.filter((entry) => entry.type === "prompting"),
+			sessions: [session],
+		};
+
+		const nodes = flattenNodes([...sessionContributor.collect(context), ...revertContributor.collect(context)]);
+
+		expect(nodes.map((node) => `${node.kind}:${node.id}:${node.nodeId}`)).toEqual([
+			"session:sess_test:session:sess_test",
+			"revert:er_1:revert:er_1",
+			"edit:e_original:revert-edit:er_1:original:e_original",
+			"edit:e_revert:revert-edit:er_1:revert:e_revert",
+		]);
+		expect(nodes.find((node) => node.nodeId === "session:sess_test")?.label).toContain("reverts=1");
+		expect(nodes.find((node) => node.nodeId === "revert:er_1")?.label).toContain("original=e_original");
+		expect(nodes.find((node) => node.nodeId === "revert-edit:er_1:revert:e_revert")?.label).toContain("Revert edit");
+	});
+
+	it("adds conflict events and contextual relation nodes through reusable contributors", () => {
+		const sourceSession: HutaoSessionMetadata = {
+			...session,
+			id: "sess_source",
+			title: "source",
+		};
+		const targetSession: HutaoSessionMetadata = {
+			...session,
+			id: "sess_target",
+			title: "target",
+		};
+		const events: HutaoEvent[] = [
+			event("prompting", "p_target", { session_id: "sess_target", text: "target work" }),
+			event("edit", "e_conflict", { session_id: "sess_source", files: ["src/conflict.ts"] }),
+			event("edit", "e_skipped", { session_id: "sess_source", files: ["src/skipped.ts"] }),
+			event("edit", "e_resolution", { session_id: "sess_target", files: ["src/resolution.ts"] }),
+			event("merge", "m_conflict", {
+				session_id: "sess_target",
+				target_session: "sess_target",
+				source_session: "sess_source",
+				mode: "apply_edits",
+				status: "conflict",
+				conflict_edits: ["e_conflict"],
+				skipped_edits: ["e_skipped"],
+				resolution_edits: ["e_resolution"],
+			}),
+		];
+		const context: HutaoProcessTreeBuildContext = {
+			repoRoot: "/repo",
+			events,
+			promptings: events.filter((entry) => entry.type === "prompting"),
+			sessions: [sourceSession, targetSession],
+		};
+
+		const nodes = flattenNodes([...sessionContributor.collect(context), ...conflictContributor.collect(context)]);
+
+		expect(nodes.map((node) => `${node.kind}:${node.id}:${node.nodeId}`)).toEqual([
+			"session:sess_source:session:sess_source",
+			"session:sess_target:session:sess_target",
+			"conflict:m_conflict:conflict:m_conflict",
+			"session:sess_source:conflict-session:m_conflict:source:sess_source",
+			"session:sess_target:conflict-session:m_conflict:target:sess_target",
+			"merge:m_conflict:conflict-merge:m_conflict",
+			"edit:e_conflict:conflict-edit:m_conflict:conflict:e_conflict",
+			"edit:e_skipped:conflict-edit:m_conflict:skipped:e_skipped",
+			"edit:e_resolution:conflict-edit:m_conflict:resolution:e_resolution",
+		]);
+		expect(nodes.find((node) => node.nodeId === "session:sess_source")?.label).toContain("conflicts=1");
+		expect(nodes.find((node) => node.nodeId === "conflict:m_conflict")?.label).toContain("conflicts=1");
+		expect(nodes.find((node) => node.nodeId === "conflict-edit:m_conflict:skipped:e_skipped")?.label).toContain(
+			"Skipped edit",
+		);
+	});
+
+	it("projects commit nodes through linked edit facts instead of only prompting ids", () => {
+		const events: HutaoEvent[] = [
+			event("prompting", "p_commit", { text: "commit projection source" }),
+			event("run_finished", "r_commit", { parent_prompting: "p_commit", status: "completed" }),
+			event("edit", "e_commit", {
+				parent_prompting: "p_commit",
+				parent_run: "r_commit",
+				files: ["src/commit.ts"],
+			}),
+			event("commit_link", "cl_commit", {
+				commit: "abc123",
+				edit_ids: ["e_commit"],
+				link_method: "patch_match",
+			}),
+			event("merge", "m_commit", {
+				mode: "apply_tree",
+				status: "conflict",
+				conflict_edits: ["e_commit"],
+				skipped_edits: ["e_commit"],
+				resolution_edits: [],
+			}),
+		];
+		const context: HutaoProcessTreeBuildContext = {
+			repoRoot: "/repo",
+			events,
+			promptings: events.filter((entry) => entry.type === "prompting"),
+			sessions: [session],
+		};
+
+		const nodes = flattenNodes([
+			...sessionContributor.collect(context),
+			...promptingContributor.collect(context),
+			...commitContributor.collect(context),
+		]);
+
+		const commitNode = nodes.find((node) => node.kind === "commit" && node.id === "abc123");
+		expect(commitNode?.parentNodeId).toBe("prompting:p_commit");
+		expect(commitNode?.label).toContain("Commit abc123");
+		expect(commitNode?.label).toContain("method=patch_match");
+		expect(commitNode?.label).toContain("confidence=medium");
+		expect(commitNode?.label).toContain("merges=1");
+		expect(commitNode?.label).toContain("conflicts=1");
+	});
+
+	it("adds merge sessions and contextual relation nodes through reusable contributors", () => {
+		const sourceSession: HutaoSessionMetadata = {
+			...session,
+			id: "sess_source",
+			title: "source",
+		};
+		const targetSession: HutaoSessionMetadata = {
+			...session,
+			id: "sess_target",
+			title: "target",
+		};
+		const events: HutaoEvent[] = [
+			event("prompting", "p_target", { session_id: "sess_target", text: "target work" }),
+			event("edit", "e_applied", { session_id: "sess_source", files: ["src/applied.ts"] }),
+			event("edit", "e_conflict", { session_id: "sess_source", files: ["src/conflict.ts"] }),
+			event("edit", "e_resolution", { session_id: "sess_target", files: ["src/resolution.ts"] }),
+			event("merge", "m_1", {
+				session_id: "sess_target",
+				target_session: "sess_target",
+				source_session: "sess_source",
+				mode: "apply_edits",
+				status: "conflict_resolved",
+				imported_edits: ["e_applied", "e_conflict"],
+				applied_edits: ["e_applied"],
+				conflict_edits: ["e_conflict"],
+				resolution_edits: ["e_resolution"],
+			}),
+		];
+		const context: HutaoProcessTreeBuildContext = {
+			repoRoot: "/repo",
+			events,
+			promptings: events.filter((entry) => entry.type === "prompting"),
+			sessions: [sourceSession, targetSession],
+		};
+
+		const nodes = flattenNodes([...sessionContributor.collect(context), ...mergeContributor.collect(context)]);
+
+		expect(nodes.map((node) => `${node.kind}:${node.id}:${node.nodeId}`)).toEqual([
+			"session:sess_source:session:sess_source",
+			"session:sess_target:session:sess_target",
+			"merge:m_1:merge:m_1",
+			"session:sess_source:merge-session:m_1:source:sess_source",
+			"session:sess_target:merge-session:m_1:target:sess_target",
+			"edit:e_applied:merge-edit:m_1:imported:e_applied",
+			"edit:e_conflict:merge-edit:m_1:imported:e_conflict",
+			"edit:e_applied:merge-edit:m_1:applied:e_applied",
+			"edit:e_conflict:merge-edit:m_1:conflict:e_conflict",
+			"edit:e_resolution:merge-edit:m_1:resolution:e_resolution",
+		]);
+		expect(nodes.find((node) => node.nodeId === "session:sess_source")?.label).toContain("promptings=0");
+		expect(nodes.find((node) => node.nodeId === "merge:m_1")?.label).toContain("source=sess_source");
+		expect(nodes.find((node) => node.nodeId === "merge:m_1")?.label).toContain("resolutions=1");
+		expect(nodes.find((node) => node.nodeId === "merge-edit:m_1:conflict:e_conflict")?.label).toContain(
+			"Conflict edit",
+		);
 	});
 });
 

@@ -103,6 +103,18 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 				const requested = commandSelections.shift();
 				if (!requested) return options[0];
 				const aliases: Record<string, string[]> = {
+					"View details": ["View details", "查看详情"],
+					"View fork source": ["View fork source", "查看 fork 来源"],
+					"View parent session": ["View parent session", "查看父 session"],
+					"View original edit": ["View original edit", "查看原始 edit"],
+					"View revert edit": ["View revert edit", "查看撤销 edit"],
+					"View merge event": ["View merge event", "查看 merge 事件"],
+					"View skipped edits": ["View skipped edits", "查看跳过 edits"],
+					"View applied edits": ["View applied edits", "查看已应用 edits"],
+					"View conflict edits": ["View conflict edits", "查看冲突 edits"],
+					"View resolution edits": ["View resolution edits", "查看解决 edits"],
+					"View source session": ["View source session", "查看来源 session"],
+					"View target session": ["View target session", "查看目标 session"],
 					"View Patch": ["View patch", "查看补丁", "查看 patch"],
 					"View original input": ["View original input", "查看原始输入"],
 					"Ask about this prompting in read-only mode": [
@@ -264,9 +276,11 @@ describe("Hutao integration safety", () => {
 			timestamp: Date.now(),
 		} as any);
 
-		const sourceNativeFile = sourceNativeSession.getSessionFile()!;
+		const sourceNativeFile = sourceNativeSession.getSessionFile();
+		if (!sourceNativeFile) throw new Error("Expected source native session file to exist.");
 		const persistedSource = readFileSync(sourceNativeFile, "utf-8");
-		expect(persistedSource).toContain("${REPO}/file.txt");
+		const repoPlaceholderPath = `${String.fromCharCode(36)}{REPO}/file.txt`;
+		expect(persistedSource).toContain(repoPlaceholderPath);
 		expect(persistedSource).not.toContain(sourceRepo);
 		expect(persistedSource).not.toContain(sourceRepo.replace(/\\/g, "/"));
 
@@ -276,11 +290,14 @@ describe("Hutao integration safety", () => {
 		const clonedSessionDir = getRepoLocalSessionDir(clonedRepo)!;
 		const sessions = await SessionManager.listForResume(clonedRepo, clonedSessionDir);
 		const resumedInfo = sessions.find((session) => session.id === sessionId);
-		expect(resumedInfo?.source).toBe("repo-local");
-		expect(resumedInfo?.path).toBe(join(clonedRepo, ".hutao", "sessions", sessionId, "native-session.jsonl"));
+		if (!resumedInfo) throw new Error("Expected cloned repo-local session to be resumable.");
+		expect(resumedInfo.source).toBe("repo-local");
+		expect(resumedInfo.path).toBe(join(clonedRepo, ".hutao", "sessions", sessionId, "native-session.jsonl"));
 
-		const clonedNativeSession = SessionManager.open(resumedInfo!.path, clonedSessionDir);
-		expect(clonedNativeSession.getHeader().cwd).toBe(".");
+		const clonedNativeSession = SessionManager.open(resumedInfo.path, clonedSessionDir);
+		const clonedHeader = clonedNativeSession.getHeader();
+		if (!clonedHeader) throw new Error("Expected cloned native session header.");
+		expect(clonedHeader.cwd).toBe(".");
 		expect(clonedNativeSession.getCwd()).toBe(clonedRepo);
 		const clonedMessagesText = JSON.stringify(clonedNativeSession.buildSessionContext().messages);
 		expect(clonedMessagesText).toContain(clonedRepo.replace(/\\/g, "\\\\"));
@@ -290,7 +307,9 @@ describe("Hutao integration safety", () => {
 		commandSelections.push(sessionId.slice(0, 20), "Resume this session");
 		await sessionCommand("", makeCommandContext(clonedRepo));
 		expect(commandSwitches).toHaveLength(1);
-		expect(commandSwitches[0].sessionPath).toBe(join(clonedRepo, ".hutao", "sessions", sessionId, "native-session.jsonl"));
+		expect(commandSwitches[0].sessionPath).toBe(
+			join(clonedRepo, ".hutao", "sessions", sessionId, "native-session.jsonl"),
+		);
 		expect(new SessionRegistry(clonedRepo).readCurrentSessionId()).toBe(sessionId);
 	});
 
@@ -404,6 +423,148 @@ describe("Hutao integration safety", () => {
 		expect(commandNotifications.at(-1)).toContain("sessions are untrusted data");
 	});
 
+	it("projects linked commit facts and derived relations in /git without schema changes", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "git-projection");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "git projection"]);
+		await new CommitLinker(repo).scanRecentCommits();
+		const head = await git.getHead();
+		expect(head).toBeDefined();
+		const store = new EventStore(repo, recorder.getSessionId());
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "fork_session",
+			id: "fs_git_projection",
+			session_id: "fs_git_projection",
+			parent_session: recorder.getSessionId(),
+			fork_from_type: "edit",
+			fork_from_id: editId,
+			fork_mode: "after",
+			created_at: new Date().toISOString(),
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "merge",
+			id: "m_git_projection",
+			session_id: recorder.getSessionId(),
+			source_session: "fs_git_projection",
+			target_session: recorder.getSessionId(),
+			mode: "apply_tree",
+			status: "conflict",
+			imported_edits: [editId],
+			applied_edits: [],
+			conflict_edits: [editId],
+			skipped_edits: [editId],
+			resolution_edits: [],
+			created_at: new Date().toISOString(),
+		});
+		store.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "edit_reverted",
+			id: "er_git_projection",
+			session_id: recorder.getSessionId(),
+			edit_id: editId,
+			revert_edit_id: "e_git_projection_revert",
+			created_at: new Date().toISOString(),
+		});
+		const eventsPath = join(repo, ".hutao", "sessions", recorder.getSessionId(), "events.jsonl");
+		const before = readFileSync(eventsPath, "utf-8");
+
+		await gitCommand(head ?? "HEAD", makeCommandContext(repo));
+
+		const notification = commandNotifications.at(-1) ?? "";
+		expect(notification).toContain("git type: normal commit");
+		expect(notification).toContain("Hutao commit_link events: 1");
+		expect(notification).toContain("method=patch_match");
+		expect(notification).toContain("confidence=medium");
+		expect(notification).toContain("confirmed=inferred");
+		expect(notification).toContain("Related merges: 1");
+		expect(notification).toContain("Related conflicts: 1");
+		expect(notification).toContain("derived_from=merge");
+		expect(notification).toContain("Apply Final Snapshot / snapshot-diff apply");
+		expect(notification).toContain("Related reverts: 1");
+		expect(notification).toContain(`original=${editId.slice(0, 20)}`);
+		expect(notification).toContain("Related forks: 1");
+		expect(notification).toContain(`source=edit:${editId.slice(0, 20)}`);
+		expect(readFileSync(eventsPath, "utf-8")).toBe(before);
+	});
+
+	it("does not attribute unlinked commits to Hutao AI provenance", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		writeFileSync(join(repo, "file.txt"), "human-only\n", "utf-8");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "human only"]);
+		const head = await git.getHead();
+		expect(head).toBeDefined();
+
+		await gitCommand(head ?? "HEAD", makeCommandContext(repo));
+
+		const notification = commandNotifications.at(-1) ?? "";
+		expect(notification).toContain("git type: normal commit");
+		expect(notification).toContain("Hutao commit_link events: 0");
+		expect(notification).toContain("No confirmed Hutao commit_link found for this commit.");
+		expect(notification).toContain("Hutao provenance: unconfirmed");
+		expect(notification).toContain("Promptings: 0");
+		expect(notification).not.toContain("change to");
+	});
+
+	it("shows git merge commits separately from Hutao merge events", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		await git.run(["checkout", "-b", "feature"]);
+		writeFileSync(join(repo, "feature.txt"), "feature\n", "utf-8");
+		await git.run(["add", "feature.txt"]);
+		await git.run(["commit", "-m", "feature"]);
+		await git.run(["checkout", "master"]);
+		writeFileSync(join(repo, "main.txt"), "main\n", "utf-8");
+		await git.run(["add", "main.txt"]);
+		await git.run(["commit", "-m", "main"]);
+		await git.run(["merge", "--no-ff", "feature", "-m", "merge feature"]);
+		const head = await git.getHead();
+		expect(head).toBeDefined();
+
+		await gitCommand(head ?? "HEAD", makeCommandContext(repo));
+
+		const notification = commandNotifications.at(-1) ?? "";
+		expect(notification).toContain("git type: merge commit");
+		expect(notification).toContain("Hutao commit_link events: 0");
+		expect(notification).toContain("No confirmed Hutao commit_link found for this commit.");
+		expect(notification).toContain("Related merges: 0");
+	});
+
+	it("shows explicit high-confidence commit links", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "explicit-link");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "explicit link"]);
+		const head = await git.getHead();
+		expect(head).toBeDefined();
+		new EventStore(repo, recorder.getSessionId()).append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "commit_link",
+			id: "cl_explicit_link",
+			session_id: recorder.getSessionId(),
+			commit: head,
+			prompting_ids: [],
+			run_ids: [],
+			edit_ids: [editId],
+			link_method: "explicit_command",
+			created_at: new Date().toISOString(),
+		});
+
+		await gitCommand(head ?? "HEAD", makeCommandContext(repo));
+
+		const notification = commandNotifications.at(-1) ?? "";
+		expect(notification).toContain("method=explicit_command");
+		expect(notification).toContain("confidence=high");
+		expect(notification).toContain("confirmed=yes");
+	});
+
+
 	it("records revert preview and completion as native custom entries", async () => {
 		const repo = makeTempDir();
 		const git = await initRepo(repo);
@@ -416,10 +577,7 @@ describe("Hutao integration safety", () => {
 
 		expect(commandNotifications.at(-2)).toContain("Hutao revert preview");
 		expect(commandNotifications.at(-1)).toContain("Reverted edit");
-		expect(commandAppendedEntries.map((entry) => entry.customType)).toEqual([
-			"hutao_revert_preview",
-			"hutao_revert",
-		]);
+		expect(commandAppendedEntries.map((entry) => entry.customType)).toEqual(["hutao_revert_preview", "hutao_revert"]);
 		expect(commandAppendedEntries[0].data).toMatchObject({
 			edit_id: editId,
 			reverse_patch_check: "ok",
@@ -432,7 +590,11 @@ describe("Hutao integration safety", () => {
 		expect((commandAppendedEntries[1].data as { revert_event_id?: string }).revert_event_id).toMatch(/^er_/);
 		expect((commandAppendedEntries[1].data as { revert_edit_id?: string }).revert_edit_id).toMatch(/^e_/);
 		const eventsAfter = readSessionEvents(repo, recorder.getSessionId());
-		expect(eventsAfter.some((event) => event.type === "hutao_revert_preview")).toBe(false);
+		const eventsFile = readFileSync(
+			join(repo, ".hutao", "sessions", recorder.getSessionId(), "events.jsonl"),
+			"utf-8",
+		);
+		expect(eventsFile).not.toContain("hutao_revert_preview");
 		expect(eventsAfter.filter((event) => event.type === "edit")).toHaveLength(
 			eventsBefore.filter((event) => event.type === "edit").length + 1,
 		);
@@ -455,6 +617,14 @@ describe("Hutao integration safety", () => {
 		await gitCommand("graph --file file.txt", makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("Hutao git graph");
 		expect(commandNotifications.at(-1)).toContain("Commit ");
+		expect(commandNotifications.at(-1)).toContain("links=1");
+		expect(commandNotifications.at(-1)).toContain("method=patch_match");
+		expect(commandNotifications.at(-1)).toContain("confidence=medium");
+		expect(commandNotifications.at(-1)).toContain("promptings=1");
+		expect(commandNotifications.at(-1)).toContain("runs=1");
+		expect(commandNotifications.at(-1)).toContain("edits=1");
+		expect(commandNotifications.at(-1)).toContain("merges=0");
+		expect(commandNotifications.at(-1)).toContain("conflicts=0");
 		commandSelections.push("View Patch");
 		await actionCommand(`edit ${editId}`, makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("diff --git");
@@ -524,6 +694,177 @@ describe("Hutao integration safety", () => {
 		expect(commandAppendedEntries.at(-1)?.customType).toBe("hutao_merge");
 	});
 
+	it("shows fork events in the prompting tree and dispatches fork actions", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "fork-tree-source");
+		const parentSession = recorder.getSessionId();
+		const forkMetadata = {
+			...(await new SessionRegistry(repo).createSessionMetadata("fs_tree_fork")),
+			id: "fs_tree_fork",
+			kind: "forkSession" as const,
+			title: "Fork tree test",
+			parent_session: parentSession,
+			fork_from: { type: "edit", id: editId, mode: "after" },
+			summary: "Fork tree test session",
+		};
+		const forkStore = new EventStore(repo, "fs_tree_fork");
+		forkStore.init(forkMetadata);
+		forkStore.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "fork_session",
+			id: "fs_tree_fork",
+			session_id: "fs_tree_fork",
+			parent_session: parentSession,
+			fork_from_type: "edit",
+			fork_from_id: editId,
+			fork_mode: "after",
+			base_git_head: "abc123",
+			base_tree: "tree_after_edit",
+			created_by: "human",
+			reason: "Fork tree test session",
+			created_at: new Date().toISOString(),
+		});
+
+		commandSelections.push("fs_tree_fork", "fs_tree_fork", "View fork source");
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Fork fs_tree_fork edit:");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Source edit");
+		expect(commandSelectCalls.at(-1)?.title).toContain("fork");
+		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
+		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
+	it("shows revert events in the prompting tree and dispatches revert actions", async () => {
+		const repo = makeTempDir();
+		const git = await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "revert-tree-source");
+		await git.run(["add", "file.txt"]);
+		await git.run(["commit", "-m", "revert tree target"]);
+		const result = await new RevertManager(repo).revertEdit(editId, recorder.getSessionId());
+		expect(result.ok).toBe(true);
+		expect(result.revertEventId).toBeDefined();
+		expect(result.revertEditId).toBeDefined();
+
+		const revertEventPrefix = String(result.revertEventId).slice(0, 20);
+		commandSelections.push(revertEventPrefix, revertEventPrefix, "View original edit");
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain(`Revert ${revertEventPrefix}`);
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Original edit");
+		expect(commandSelectCalls.at(-1)?.title).toContain("revert");
+		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
+		expect(commandNotifications.at(-1)).toContain("file.txt");
+
+		commandSelections.push(revertEventPrefix, revertEventPrefix, "View revert edit");
+		await promptingCommand("", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain(`Edit ${result.revertEditId}`);
+		expect(commandNotifications.at(-1)).toContain(`summary: Reverted edit ${editId}`);
+		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
+	it("shows conflict events in the prompting tree and dispatches conflict actions", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "conflict-tree-source");
+		const sourceSession = recorder.getSessionId();
+		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_conflict_tree_target");
+		const targetStore = new EventStore(repo, "sess_conflict_tree_target");
+		targetStore.init(targetMetadata);
+		targetStore.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "prompting",
+			id: "p_conflict_tree_target",
+			session_id: "sess_conflict_tree_target",
+			actor: "human",
+			text: "target has a merge conflict",
+			created_at: new Date().toISOString(),
+			status: "active",
+		});
+		targetStore.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "merge",
+			id: "m_conflict_tree",
+			session_id: "sess_conflict_tree_target",
+			source_session: sourceSession,
+			target_session: "sess_conflict_tree_target",
+			mode: "apply_edits",
+			status: "conflict",
+			imported_edits: [editId],
+			applied_edits: [],
+			conflict_edits: [editId],
+			skipped_edits: [editId],
+			resolution_edits: [],
+			created_at: new Date().toISOString(),
+		});
+
+		commandSelections.push("m_conflict_tree", "m_conflict_tree", "View skipped edits");
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Conflict m_conflict_tree apply_edits conflict");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Skipped edit");
+		expect(commandSelectCalls.at(-1)?.title).toContain("conflict");
+		expect(commandNotifications.at(-1)).toContain("Skipped edits for conflict m_conflict_tree");
+		expect(commandNotifications.at(-1)).toContain(editId.slice(0, 20));
+		expect(commandNotifications.at(-1)).toContain("file.txt");
+
+		commandSelections.push("m_conflict_tree", "m_conflict_tree", "View merge event");
+		await promptingCommand("", makeCommandContext(repo));
+		expect(commandNotifications.at(-1)).toContain("Merge m_conflict_tree");
+		expect(commandNotifications.at(-1)).toContain("status: conflict");
+	});
+
+	it("shows merge events in the prompting tree and dispatches merge actions", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder, editId } = await recordFileEdit(repo, "merge-tree-source");
+		const sourceSession = recorder.getSessionId();
+		const targetMetadata = await new SessionRegistry(repo).createSessionMetadata("sess_merge_tree_target");
+		new EventStore(repo, "sess_merge_tree_target").init(targetMetadata);
+		const targetStore = new EventStore(repo, "sess_merge_tree_target");
+		targetStore.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "prompting",
+			id: "p_merge_tree_target",
+			session_id: "sess_merge_tree_target",
+			actor: "human",
+			text: "target accepts source work",
+			created_at: new Date().toISOString(),
+			status: "active",
+		});
+		targetStore.append({
+			schema_version: HUTAO_SCHEMA_VERSION,
+			type: "merge",
+			id: "m_merge_tree",
+			session_id: "sess_merge_tree_target",
+			source_session: sourceSession,
+			target_session: "sess_merge_tree_target",
+			mode: "apply_edits",
+			status: "completed",
+			imported_edits: [editId],
+			applied_edits: [editId],
+			conflict_edits: [],
+			skipped_edits: [],
+			resolution_edits: [],
+			created_at: new Date().toISOString(),
+		});
+
+		commandSelections.push("m_merge_tree", "m_merge_tree", "View applied edits");
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Merge m_merge_tree apply_edits completed");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Applied edit");
+		expect(commandSelectCalls.at(-1)?.title).toContain("merge");
+		expect(commandNotifications.at(-1)).toContain("Applied edits for merge m_merge_tree");
+		expect(commandNotifications.at(-1)).toContain(editId.slice(0, 20));
+		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
 	it("opens prompting as an interactive tree by default and dispatches selected nodes to details", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);
@@ -531,19 +872,31 @@ describe("Hutao integration safety", () => {
 		const prompting = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting");
 		expect(prompting?.id).toBeDefined();
 
-		commandSelections.push(String(prompting?.id).slice(0, 20), "View original input");
+		commandSelections.push(String(prompting?.id).slice(0, 20), String(prompting?.id).slice(0, 20), "View original input");
 		await promptingCommand("", makeCommandContext(repo));
 
+		expect(commandSelectCalls.at(-3)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-3)?.options.join("\n")).toContain("Session sess_");
+		expect(commandSelectCalls.at(-3)?.options.join("\n")).toContain("Prompting p_");
+		expect(commandSelectCalls.at(-3)?.options.join("\n")).toContain("(runs=1 edits=1)");
+		expect(commandSelectCalls.at(-3)?.options.join("\n")).not.toContain("Run r_");
+		expect(commandSelectCalls.at(-3)?.options.join("\n")).not.toContain("Edit e_");
 		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
-		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Session sess_");
-		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Prompting p_");
 		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Run r_");
-		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Edit e_");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("(edits=1)");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).not.toContain("Edit e_");
 		expect(commandSelectCalls.at(-1)?.title).toContain("提示操作");
 		expect(commandNotifications.at(-1)).toContain(`Prompting ${prompting?.id}`);
 		expect(commandNotifications.at(-1)).toContain("change to tree-default");
 
-		commandSelections.push(editId.slice(0, 20), "View Patch");
+		const run = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "run_finished");
+		expect(run?.id).toBeDefined();
+		commandSelections.push(
+			String(prompting?.id).slice(0, 20),
+			String(run?.id).slice(0, 20),
+			editId.slice(0, 20),
+			"View Patch",
+		);
 		await promptingCommand("", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-1)?.title).toContain("修改操作");
@@ -560,6 +913,7 @@ describe("Hutao integration safety", () => {
 		expect(prompting?.id).toBeDefined();
 
 		commandSelections.push(
+			String(prompting?.id).slice(0, 20),
 			String(prompting?.id).slice(0, 20),
 			"Ask about this prompting in read-only mode",
 			"Ask a read-only question",
@@ -622,13 +976,14 @@ describe("Hutao integration safety", () => {
 			created_at: new Date().toISOString(),
 		});
 
-		commandSelections.push("sa_security");
+		commandSelections.push(String(prompting?.id).slice(0, 20), "sa_security", "View details");
 		await promptingCommand("", makeCommandContext(repo));
 
-		expect(commandSelectCalls.at(-1)?.title).toBe("Hutao prompting tree");
-		expect(commandSelectCalls.at(-1)?.options.join("\n")).toContain(
+		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain(
 			"Subagent sa_security security-reviewer completed",
 		);
+		expect(commandSelectCalls.at(-1)?.title).toContain("subagent");
 		expect(commandNotifications.at(-1)).toContain("Subagent sa_security");
 		expect(commandNotifications.at(-1)).toContain("security-reviewer");
 		expect(commandNotifications.at(-1)).toContain("No critical issues found");

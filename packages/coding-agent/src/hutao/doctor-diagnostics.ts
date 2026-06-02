@@ -79,7 +79,10 @@ function rawOnlyHistories(sessionsDir: string): string[] {
 	});
 }
 
-function incompleteNativeHistories(repoRoot: string, sessions: HutaoSessionMetadata[]): Array<{
+function incompleteNativeHistories(
+	repoRoot: string,
+	sessions: HutaoSessionMetadata[],
+): Array<{
 	sessionId: string;
 	status: string;
 	reason?: string;

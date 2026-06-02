@@ -251,15 +251,21 @@ export class MergeManager {
 			}
 			applied.push(String(edit.id));
 		}
-		const mergeId = this.writeMergeEvent(targetSession, sourceSession, "apply_edits", conflicts.length ? "conflict" : "completed", {
-			importedEdits: sourceEdits.map((event) => event.id),
-			appliedEdits: applied,
-			skippedEdits: skipped,
-			conflictEdits: conflicts,
-			resolutionEdits: [],
-			beforeTree,
-			afterTree: await this.git.getTree(),
-		});
+		const mergeId = this.writeMergeEvent(
+			targetSession,
+			sourceSession,
+			"apply_edits",
+			conflicts.length ? "conflict" : "completed",
+			{
+				importedEdits: sourceEdits.map((event) => event.id),
+				appliedEdits: applied,
+				skippedEdits: skipped,
+				conflictEdits: conflicts,
+				resolutionEdits: [],
+				beforeTree,
+				afterTree: await this.git.getTree(),
+			},
+		);
 		return {
 			ok: conflicts.length === 0,
 			mode: "apply_edits",

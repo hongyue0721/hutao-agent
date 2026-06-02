@@ -19,8 +19,8 @@ import {
 	sessionCommand,
 	subagentCommand,
 } from "./commands.ts";
-import { GitAdapter } from "./git-adapter.ts";
 import { defaultReadOnlyInquiryGuard } from "./ephemeral-inquiry/read-only-guard.ts";
+import { GitAdapter } from "./git-adapter.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { isProtectedRepoPath } from "./secret-guard.ts";
 import { SessionRegistry } from "./session-registry.ts";

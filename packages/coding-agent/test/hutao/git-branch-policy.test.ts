@@ -53,9 +53,13 @@ describe("GitBranchPolicy", () => {
 		expect(parseGitBranchPolicyMode("never")).toBe("never");
 		expect(parseGitBranchPolicyMode("sometimes")).toBeUndefined();
 		expect(sanitizeGitBranchNamePart("refs/heads/bad branch@name..")).toBe("bad-branch-name");
-		expect(defaultForkBranchName({ forkSessionId: "fs_1234567890abcdef", sourceType: "edit", sourceId: "e_abcdef123456789" })).toBe(
-			"hutao/fs_1234567890abcdef-edit-e_abcdef1234",
-		);
+		expect(
+			defaultForkBranchName({
+				forkSessionId: "fs_1234567890abcdef",
+				sourceType: "edit",
+				sourceId: "e_abcdef123456789",
+			}),
+		).toBe("hutao/fs_1234567890abcdef-edit-e_abcdef1234");
 	});
 
 	it("resolves mode from override, env, repo config, then default never", () => {

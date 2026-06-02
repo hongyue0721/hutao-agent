@@ -16,7 +16,9 @@ export class ReadOnlyInquiryGuard {
 		this.ttlMs = ttlMs;
 	}
 
-	activate(request: Pick<ReadOnlyInquiryLock, "repoRoot" | "targetKind" | "targetId" | "question">): ReadOnlyInquiryLock {
+	activate(
+		request: Pick<ReadOnlyInquiryLock, "repoRoot" | "targetKind" | "targetId" | "question">,
+	): ReadOnlyInquiryLock {
 		const now = Date.now();
 		const lock: ReadOnlyInquiryLock = {
 			...request,

@@ -1,7 +1,11 @@
 import { SessionRegistry } from "../session-registry.ts";
 import { commitContributor } from "./contributors/commit-contributor.ts";
+import { conflictContributor } from "./contributors/conflict-contributor.ts";
 import { editContributor } from "./contributors/edit-contributor.ts";
+import { forkContributor } from "./contributors/fork-contributor.ts";
+import { mergeContributor } from "./contributors/merge-contributor.ts";
 import { promptingContributor } from "./contributors/prompting-contributor.ts";
+import { revertContributor } from "./contributors/revert-contributor.ts";
 import { runContributor } from "./contributors/run-contributor.ts";
 import { sessionContributor } from "./contributors/session-contributor.ts";
 import { subagentContributor } from "./contributors/subagent-contributor.ts";
@@ -15,6 +19,10 @@ export const defaultProcessTreeContributors: HutaoProcessTreeContributor[] = [
 	runContributor,
 	editContributor,
 	commitContributor,
+	forkContributor,
+	revertContributor,
+	conflictContributor,
+	mergeContributor,
 ];
 
 function normalizeNode(node: HutaoProcessTreeNode): HutaoProcessTreeNode {

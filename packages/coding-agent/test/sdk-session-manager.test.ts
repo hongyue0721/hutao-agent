@@ -62,7 +62,9 @@ describe("createAgentSession session manager defaults", () => {
 		const sessionFile = session.sessionManager.getSessionFile();
 
 		expect(sessionDir).toBe(getRepoLocalSessionDir(cwd));
-		expect(sessionFile).toBe(join(cwd, ".hutao", "sessions", session.sessionManager.getSessionId(), "native-session.jsonl"));
+		expect(sessionFile).toBe(
+			join(cwd, ".hutao", "sessions", session.sessionManager.getSessionId(), "native-session.jsonl"),
+		);
 
 		session.dispose();
 	});
