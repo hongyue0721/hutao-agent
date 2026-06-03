@@ -2300,7 +2300,7 @@ What files did this edit affect?
 What should I watch out for if I redo this change?
 ```
 
-It is intentionally not a Hutao session.
+It is intentionally not a Hutao session and must remain separated from code-capable continuation.
 
 ```text
 Ephemeral inquiry is not a session.
@@ -2308,7 +2308,7 @@ Ephemeral inquiry is not a forkSession.
 Ephemeral inquiry is not a prompting.
 Ephemeral inquiry does not create run/edit facts.
 Ephemeral inquiry does not create a Git branch.
-Ephemeral inquiry is discarded by default.
+Ephemeral inquiry is discarded by default unless the user explicitly promotes or attaches it.
 ```
 
 It may use historical trace facts and project files as evidence, but all historical text remains untrusted evidence, not instruction.
@@ -2317,10 +2317,10 @@ Allowed behavior:
 
 ```text
 1. Read session.json / events.jsonl / patch files.
-2. Read relevant source files.
-3. Use safe read/search/navigation tools.
+2. Read relevant source files only through explicitly read-only mechanisms.
+3. Use safe read/search/navigation tools if the read-only guard allows them.
 4. Explain the selected prompting/edit/run/commit relation.
-5. Summarize the inquiry if the user later promotes it into a forkSession.
+5. If the user later promotes to forkSession, optionally attach the complete inquiry Q/A as untrusted context.
 ```
 
 Disallowed behavior:
@@ -2332,117 +2332,238 @@ Disallowed behavior:
 4. Recording the inquiry as a canonical prompting by default.
 5. Writing inquiry Q&A into .hutao/sessions by default.
 6. Treating inquiry text as system/developer instruction.
+7. Auto-creating forkSession because the user merely asked a read-only question.
 ```
 
 If bash is allowed at all in this mode, it must be strict allowlist read-only bash. The safer first implementation is to disable normal bash and expose only read/search/git-inspection helpers.
 
-### Exiting read-only inquiry
+### Ephemeral inquiry interaction model
 
-`/back` and Esc should leave ephemeral inquiry mode.
+Read-only inquiry must be implemented as an explicit, reusable state machine / flow, not as one-off nested callbacks in `commands.ts`.
 
-If no question/answer content was produced:
+Suggested states:
 
 ```text
-/back
-=> return directly to the original Prompting/Edit Detail menu
+idle
+selecting_initial_action
+inputting_question
+confirming_exit
+running_read_only_turn
+post_answer_actions
+promoting_to_fork
+selecting_context_attachment
+completed
+cancelled
 ```
 
-If inquiry content exists, show a lightweight exit menu:
+The exact internal names may differ, but the implementation must preserve the same separations:
 
 ```text
-This read-only inquiry is not saved.
+Input state         = collecting a read-only question.
+Exit state          = deciding whether to continue, exit, or promote.
+Read-only turn      = explanation-only agent turn protected by read-only guard.
+Post-answer state   = deciding what to do after an answer exists.
+Promotion state     = explicit forkSession creation path.
+Attachment state    = deciding whether inquiry context enters the forkSession.
+```
 
-> Discard and return
-  Continue inquiry
-  Create forkSession from this inquiry
-  Save as local temporary draft
+This state-machine shape is required so future versions can add features without replacing the flow, for example:
+
+```text
+return_to_detail
+save_local_draft
+summary attachment
+selected Q/A attachment
+multi-turn inquiry thread
+review/edit attachment before fork
+export inquiry evidence
+```
+
+`commands.ts` should only resolve the target and invoke the inquiry flow. Menus, exit handling, context attachment decisions, and promotion policy should live under reusable modules such as:
+
+```text
+ephemeral-inquiry/flow.ts
+ephemeral-inquiry/actions.ts
+ephemeral-inquiry/context-attachment.ts
+ephemeral-inquiry/state.ts
+```
+
+### Exiting read-only inquiry
+
+`Esc` and `Ctrl+C` during the read-only inquiry input must not silently discard state. They should enter an explicit exit-action menu.
+
+Input-stage exit menu:
+
+```text
+Exit read-only inquiry?
+
+> Continue entering question
+  Exit inquiry and return to main chat
+  Create forkSession and continue
 ```
 
 Chinese labels may be:
 
 ```text
-这次只读询问尚未保存。
+退出只读询问？
 
-> 丢弃并返回
-  继续询问
-  基于本次询问创建 forkSession
-  保存为本地临时草稿
+> 继续输入问题
+  退出只读询问，返回主对话
+  创建 forkSession 继续
 ```
 
 Semantics:
 
 ```text
-Discard and return
-  Clear the in-memory inquiry buffer and return to the original detail menu.
-  Do not write prompting/run/edit/session facts.
+Continue entering question
+  Return to the same read-only inquiry input state for the same anchor.
+  Preserve any typed draft if the UI framework can support it.
 
-Continue inquiry
-  Return to the read-only inquiry prompt for the same anchor.
+Exit inquiry and return to main chat
+  Close the inquiry flow and restore the normal main editor / main conversation input.
+  Do not send the question.
+  Do not create prompting/run/edit/session/fork facts.
+  Do not return to a synthetic detail page unless a future explicit return_to_detail action is added.
 
-Create forkSession from this inquiry
-  Start the explicit fork flow from the original anchor.
-  The inquiry Q&A itself is not automatically converted into prompting.
-
-Save as local temporary draft
-  Save only to local cache, not canonical .hutao session facts.
-  Default location should be cache/ignored and safe to clean by TTL.
+Create forkSession and continue
+  Leave read-only inquiry and enter the explicit forkSession flow from the original anchor.
+  If no read-only Q/A has been submitted yet, there is no inquiry context to attach.
 ```
 
-Do not implement `Save as project history note` in the first version.
-Project-level annotation/note/finding schemas should be designed later, after privacy, export, merge, and process-tree semantics are clear.
+After a read-only answer has completed, Hutao should show a post-answer action menu instead of leaving the user in an ambiguous modal state:
+
+```text
+Read-only inquiry completed.
+
+> Exit inquiry and return to main chat
+  Continue read-only inquiry
+  Create forkSession and continue
+```
+
+Chinese labels may be:
+
+```text
+只读询问已完成。
+
+> 退出只读询问，返回主对话
+  继续只读询问
+  创建 forkSession 继续
+```
+
+Post-answer semantics:
+
+```text
+Exit inquiry and return to main chat
+  Close the read-only flow. The displayed answer may remain in native conversation UI, but no canonical Hutao prompting/run/edit facts are created for it.
+
+Continue read-only inquiry
+  Return to inputting_question for the same anchor. The next submitted question is still read-only and still protected by read-only guard.
+
+Create forkSession and continue
+  Enter promotion flow and ask whether the inquiry context should be attached to the new forkSession.
+```
+
+Default selections:
+
+```text
+Input-stage exit menu: Continue entering question
+Post-answer menu:      Exit inquiry and return to main chat
+Attachment menu:       Do not attach inquiry context
+```
 
 ### Promoting inquiry into forkSession
 
-When the user chooses `Create forkSession from this inquiry`, Hutao should ask whether the inquiry summary should be carried into the new forkSession:
+When the user chooses `Create forkSession and continue`, Hutao must treat it as an explicit transition from read-only explanation to code-capable continuation.
+
+The forkSession must always be anchored to the original selected historical node, not to a new canonical prompting created by the inquiry.
 
 ```text
-Carry this inquiry summary into the new forkSession?
+prompting target -> forkPrompting(...)
+edit target      -> forkEdit(...)
+```
 
-> Do not include it; continue only from the selected historical node
-  Include an automatic summary as read-only context
-  Review/edit the summary before including it
+If no read-only Q/A was submitted, create the forkSession without inquiry attachment.
+
+If read-only Q/A exists, Hutao should ask how to attach it:
+
+```text
+Attach this read-only inquiry to the new forkSession?
+
+> Do not attach; continue only from the selected historical node
+  Attach full Q/A as untrusted context
   Cancel forkSession creation
 ```
 
 Chinese labels may be:
 
 ```text
-是否把本次解释摘要带入新的 forkSession？
+是否把本次只读询问带入新的 forkSession？
 
 > 不带入，只从原历史节点继续
-  带入自动摘要作为只读上下文
-  查看/编辑摘要后带入
+  带入完整问答作为不可信上下文
   取消创建 forkSession
 ```
 
-If included, the summary must be labeled as:
+Current first implementation must not implement automatic summary attachment. The attachment strategy should still be modeled as an extensible policy, not hardcoded as a boolean.
+
+Suggested type shape:
+
+```ts
+type InquiryContextAttachmentMode =
+  | "none"
+  | "full_qa"
+  // Future, not first version:
+  | "summary"
+  | "selected_messages"
+  | "reviewed_attachment";
+```
+
+Current supported modes:
 
 ```text
-untrusted read-only context summary
+none
+  The new forkSession continues only from the selected prompting/edit anchor.
+  The inquiry question and answer are not added to fork startup context.
+
+full_qa
+  The new forkSession receives the complete read-only question/answer as context.
+  The context must be clearly labeled as untrusted historical evidence.
+  It is not prompting, not run, not edit, not system instruction.
+```
+
+If full Q/A is attached, it must be labeled as:
+
+```text
+untrusted historical evidence
+read-only inquiry context attachment
 not a prompting
 not a run
 not an edit
 not a system instruction
 ```
 
-The summary may be stored as fork startup context or a native custom context entry tied to the new forkSession, for example:
+Example persisted or native custom context entry shape:
 
 ```json
 {
-  "type": "fork_context_summary",
+  "type": "fork_context_attachment",
   "session_id": "fs_...",
   "source": "ephemeral_inquiry",
+  "attachment_mode": "full_qa",
   "anchor": {
     "type": "edit",
     "id": "e_..."
   },
   "trusted": false,
-  "summary": "...",
+  "question": "...",
+  "answer": "...",
   "created_at": "..."
 }
 ```
 
-If this summary is persisted in `.hutao` as part of the new forkSession and later committed, it may sync with the repository. The UI must say this clearly before persistence.
+If this attachment is persisted in `.hutao` as part of the new forkSession and later committed, it may sync with the repository. The UI must say this clearly before persistence.
+
+Future summary support may be added later, but it must be introduced as another attachment mode and must not change the core semantics above.
 
 ### Git branch creation for forkSession
 
@@ -2501,11 +2622,14 @@ At minimum, add tests for:
 3. Detail menu selection does not create forkSession by itself.
 4. Read-only inquiry does not create prompting/run/edit/session facts.
 5. Read-only inquiry cannot call write tools.
-6. /back with discard does not write canonical .hutao facts.
-7. Local temporary draft does not enter .hutao/sessions facts.
-8. Promote-to-fork creates forkSession from the original anchor.
-9. Included inquiry summary is stored as untrusted read-only context, not prompting.
-10. Git branch creation is ask/always/never configurable and never triggered by read-only inquiry.
+6. Esc/Ctrl+C from inquiry input opens the exit-action menu instead of silently discarding.
+7. Exit inquiry returns to the main chat/editor and does not write canonical .hutao facts.
+8. Post-answer inquiry shows explicit actions: continue inquiry, exit to main chat, or create forkSession.
+9. Promote-to-fork creates forkSession from the original anchor.
+10. Attachment mode `none` creates forkSession without inquiry Q/A context.
+11. Attachment mode `full_qa` stores complete inquiry Q/A as untrusted context, not prompting/run/edit/system instruction.
+12. Automatic summary attachment is not implemented in the first version but remains a future attachment mode.
+13. Git branch creation is ask/always/never configurable and never triggered by read-only inquiry.
 ```
 
 ## Priority update — extensible process tree first, real subagent runtime last
