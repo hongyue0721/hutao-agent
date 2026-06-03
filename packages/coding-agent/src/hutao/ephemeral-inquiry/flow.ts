@@ -1,10 +1,12 @@
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
-import type { SessionEntry } from "../../core/session-manager.ts";
 import type { HutaoEvent } from "../event-store.ts";
 import { type TranslationKey, t } from "../i18n.ts";
 import type { HutaoProcessActionTarget } from "../process-actions/types.ts";
 import { stringArray } from "../trace-relations.ts";
 import { defaultReadOnlyInquiryGuard, type ReadOnlyInquiryGuard } from "./read-only-guard.ts";
+import { captureInquiryTranscript, type EphemeralInquiryTranscript } from "./transcript-tracker.ts";
+
+export type { EphemeralInquiryTranscript } from "./transcript-tracker.ts";
 
 export const HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE = "hutao_ephemeral_read_only_inquiry";
 export const HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE = "hutao_ephemeral_inquiry_context_attachment";
@@ -70,11 +72,6 @@ export interface EphemeralInquiryDetails {
 	question: string;
 	guard_lock_id: string;
 	created_at: string;
-}
-
-export interface EphemeralInquiryTranscript {
-	question: string;
-	answer: string;
 }
 
 const INITIAL_ACTIONS: Array<{ id: EphemeralInquiryInitialAction; labelKey: TranslationKey }> = [
@@ -176,51 +173,6 @@ function renderActions<TId extends string>(
 	actions: Array<{ id: TId; labelKey: TranslationKey }>,
 ): Array<{ id: TId; label: string }> {
 	return actions.map((action) => ({ id: action.id, label: t(repoRoot, action.labelKey) }));
-}
-
-function entryTextContent(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => {
-			if (!part || typeof part !== "object") return "";
-			const record = part as Record<string, unknown>;
-			if (record.type === "text") return typeof record.text === "string" ? record.text : "";
-			if (record.type === "tool_call") return `[tool_call ${String(record.name ?? record.id ?? "unknown")}]`;
-			if (record.type === "tool_result") return `[tool_result ${String(record.toolCallId ?? "unknown")}]`;
-			return "";
-		})
-		.filter(Boolean)
-		.join("\n");
-}
-
-function safeSessionEntries(ctx: ExtensionCommandContext): SessionEntry[] {
-	try {
-		return ctx.sessionManager?.getEntries?.() ?? [];
-	} catch {
-		return [];
-	}
-}
-
-async function safeWaitForIdle(ctx: ExtensionCommandContext): Promise<void> {
-	try {
-		await ctx.waitForIdle?.();
-	} catch {
-		// Command contexts in tests or degraded runtimes may not expose waitForIdle.
-		// The inquiry flow should still preserve canonical trace safety; it simply
-		// cannot capture an answer transcript for full_qa attachment in that case.
-	}
-}
-
-function newestAssistantText(entries: SessionEntry[], beforeEntryIds: Set<string>): string | undefined {
-	for (let index = entries.length - 1; index >= 0; index -= 1) {
-		const entry = entries[index];
-		if (beforeEntryIds.has(entry.id)) continue;
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const text = entryTextContent(entry.message.content).trim();
-		if (text) return text;
-	}
-	return undefined;
 }
 
 function truncate(value: string, maxLength = 20000): string {
@@ -338,7 +290,6 @@ export class EphemeralInquiryFlow {
 	}
 
 	private async askReadOnlyQuestion(question: string): Promise<EphemeralInquiryTranscript | undefined> {
-		const beforeEntryIds = new Set(safeSessionEntries(this.ctx).map((entry) => entry.id));
 		const event = eventForTarget(this.target, this.events);
 		const lock = this.guard.activate({
 			repoRoot: this.repoRoot,
@@ -356,31 +307,34 @@ export class EphemeralInquiryFlow {
 			guard_lock_id: lock.id,
 			created_at: lock.createdAt,
 		};
-		this.ctx.sendMessage(
-			{
-				customType: HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE,
-				content: buildInquiryContent(this.target, event, question),
-				display: true,
-				details,
-			},
-			{ triggerTurn: true },
-		);
-		this.ctx.ui.notify(
-			[
-				t(this.repoRoot, "inquiry.notice.sent"),
-				`anchor: ${this.target.kind} ${this.target.id}`,
-				"canonical history: not written",
-				"tool policy: read-only guard active for this turn",
-			].join("\n"),
-			"info",
-		);
 		try {
-			await safeWaitForIdle(this.ctx);
+			return await captureInquiryTranscript({
+				ctx: this.ctx,
+				question,
+				send: () => {
+					this.ctx.sendMessage(
+						{
+							customType: HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE,
+							content: buildInquiryContent(this.target, event, question),
+							display: true,
+							details,
+						},
+						{ triggerTurn: true },
+					);
+					this.ctx.ui.notify(
+						[
+							t(this.repoRoot, "inquiry.notice.sent"),
+							`anchor: ${this.target.kind} ${this.target.id}`,
+							"canonical history: not written",
+							"tool policy: read-only guard active for this turn",
+						].join("\n"),
+						"info",
+					);
+				},
+			});
 		} finally {
 			this.guard.clear(this.repoRoot);
 		}
-		const answer = newestAssistantText(safeSessionEntries(this.ctx), beforeEntryIds);
-		return answer ? { question, answer } : undefined;
 	}
 
 	private exitToMain(): void {

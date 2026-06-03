@@ -6167,7 +6167,8 @@ exit-action menu
 
 running_read_only_turn
   - read-only guard blocks tool calls
-  - command waits for idle when available
+  - transcript-tracker listens for newly appended assistant native entries
+  - transcript-tracker uses idle/pending-message state plus a short grace window so fire-and-forget sendMessage does not show post-answer actions too early
   - assistant answer is captured from native session entries when available
 
 post-answer menu
@@ -6287,7 +6288,13 @@ commands.ts
   resolves process target and invokes EphemeralInquiryFlow only
 
 ephemeral-inquiry/flow.ts
-  owns state transitions, menus, read-only question submission, transcript capture, and attachment policy
+  owns state transitions, menus, read-only question submission, and attachment policy
+
+ephemeral-inquiry/transcript-tracker.ts
+  owns transcript capture for read-only turns
+  listens to sessionManager.onAppendEntry when available
+  records before-entry ids so old assistant messages are ignored
+  combines append-entry capture, idle state, pending-message state, waitForIdle, and timeout-safe fallback
 
 runCoordinatedFork
   accepts optional contextAttachment and writes it into fresh fork native context before optional follow-up user message
@@ -6308,15 +6315,15 @@ summary mode pretending to exist before it is implemented
 Latest local verification for this change:
 
 ```bash
-npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/subagent-read-model.test.ts
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-transcript-tracker.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/subagent-read-model.test.ts
 npm run check
 ```
 
 Observed result:
 
 ```text
-8 Hutao test files passed
-88 Hutao tests passed
+9 Hutao test files passed
+91 Hutao tests passed
 npm run check passed
 ```
 
@@ -6337,4 +6344,6 @@ When modifying this feature later, keep or add tests for:
 10. full_qa is not converted into canonical prompting/run/edit/system instruction.
 11. Optional follow-up message remains separate from full_qa attachment.
 12. Summary attachment remains unimplemented unless added as an explicit new attachment mode with tests.
+13. transcript-tracker waits for newly appended assistant entries and ignores old assistant messages.
+14. transcript-tracker safely degrades when sessionManager / onAppendEntry is unavailable.
 ```

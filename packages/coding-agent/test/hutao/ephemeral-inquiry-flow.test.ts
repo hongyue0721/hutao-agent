@@ -18,6 +18,7 @@ function fakeContext(options: FakeContextOptions): ExtensionCommandContext {
 	const selections = [...(options.selections ?? [])];
 	const inputs = [...(options.inputs ?? [])];
 	const entries = options.entries ?? [];
+	let idle = true;
 	const ui = {
 		select: vi.fn(async (_title: string, selectOptions: string[]) => {
 			const requested = selections.shift();
@@ -42,13 +43,18 @@ function fakeContext(options: FakeContextOptions): ExtensionCommandContext {
 	return {
 		cwd: "/repo",
 		ui,
+		isIdle: () => idle,
+		hasPendingMessages: () => false,
 		sessionManager: {
 			getEntries: () => entries,
 		},
 		waitForIdle: vi.fn(async () => {
 			await options.onWaitForIdle?.(entries);
+			idle = true;
 		}),
-		sendMessage: vi.fn(),
+		sendMessage: vi.fn(() => {
+			idle = false;
+		}),
 	} as unknown as ExtensionCommandContext;
 }
 
