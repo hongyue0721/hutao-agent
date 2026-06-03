@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionCommandContext } from "../../src/core/extensions/types.ts";
-import { getRepoLocalSessionDir, SessionManager } from "../../src/core/session-manager.ts";
+import {
+	getRepoLocalSessionDir,
+	type SessionAppendListener,
+	type SessionEntry,
+	SessionManager,
+} from "../../src/core/session-manager.ts";
 import {
 	actionCommand,
 	doctorCommand,
@@ -67,6 +72,26 @@ async function recordFileEdit(repo: string, text: string): Promise<{ recorder: T
 	return { recorder, editId: edits[edits.length - 1].id };
 }
 
+async function recordNativeLinkedPrompting(
+	repo: string,
+	text: string,
+): Promise<{ recorder: TraceRecorder; nativeEntryId: string; prompting: HutaoEvent }> {
+	const sessionDir = getRepoLocalSessionDir(repo)!;
+	const nativeSession = SessionManager.create(repo, sessionDir);
+	const recorder = new TraceRecorder(repo, undefined, nativeSession.getSessionId(), () => ({
+		sessionId: nativeSession.getSessionId(),
+		sessionFile: nativeSession.getSessionFile(),
+		leafEntryId: nativeSession.getLeafId(),
+	}));
+	await recorder.init();
+	await recorder.recordPrompting(text, repo);
+	const nativeEntryId = nativeSession.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+	await recorder.recordNativeEntryLink(nativeSession.getEntry(nativeEntryId)!);
+	const prompting = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting");
+	if (!prompting) throw new Error("Expected native-linked prompting to be recorded.");
+	return { recorder, nativeEntryId, prompting };
+}
+
 function readSessionEvents(repo: string, sessionId: string): HutaoEvent[] {
 	return readFileSync(join(repo, ".hutao", "sessions", sessionId, "events.jsonl"), "utf-8")
 		.trim()
@@ -82,6 +107,13 @@ const commandMessages: Array<{
 	message: { customType?: string; content?: unknown; display?: boolean; details?: unknown };
 	options?: unknown;
 }> = [];
+const commandForkMessages: Array<{
+	message: { customType?: string; content?: unknown; display?: boolean; details?: unknown };
+	options?: unknown;
+}> = [];
+const commandForkUserMessages: Array<{ content: unknown; options?: unknown }> = [];
+const commandForkCalls: Array<{ entryId: string; options?: unknown }> = [];
+const commandAssistantReplies: string[] = [];
 const commandAppendedEntries: Array<{ customType: string; data?: unknown }> = [];
 const commandSwitches: Array<{
 	sessionPath: string;
@@ -89,11 +121,48 @@ const commandSwitches: Array<{
 }> = [];
 const commandSelectCalls: Array<{ title: string; options: string[] }> = [];
 
+function assistantEntry(id: string, text: string): SessionEntry {
+	return {
+		type: "message",
+		id,
+		parentId: null,
+		timestamp: new Date().toISOString(),
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text }],
+		},
+	} as SessionEntry;
+}
+
 function makeCommandContext(repo: string): ExtensionCommandContext {
+	const entries: SessionEntry[] = [];
+	const listeners = new Set<SessionAppendListener>();
+	let idle = true;
+	const appendEntry = (entry: SessionEntry) => {
+		entries.push(entry);
+		for (const listener of [...listeners]) listener(entry);
+	};
 	return {
 		cwd: repo,
-		waitForIdle: async () => undefined,
+		isIdle: () => idle,
+		hasPendingMessages: () => false,
+		waitForIdle: async () => {
+			if (!idle) {
+				const reply = commandAssistantReplies.shift();
+				if (reply) appendEntry(assistantEntry(`assistant_${entries.length + 1}`, reply));
+			}
+			idle = true;
+		},
+		sessionManager: {
+			getEntries: () => entries,
+			onAppendEntry: (listener: SessionAppendListener) => {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+		},
 		ui: {
+			getEditorText: () => "",
+			setEditorText: () => undefined,
 			notify: (message: string) => {
 				commandNotifications.push(message);
 			},
@@ -122,6 +191,10 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 						"只读询问这个 prompting",
 					],
 					"Ask a read-only question": ["Ask a read-only question", "提出只读问题"],
+					"Create forkSession and continue": ["Create forkSession and continue", "创建 forkSession"],
+					"Attach full Q/A as untrusted context": ["Attach full Q/A as untrusted context", "带入完整问答"],
+					"Do not attach": ["Do not attach", "不带入"],
+					"Exit inquiry and return to main chat": ["Exit inquiry and return to main chat", "退出只读询问"],
 					"Promote to forkSession": ["Promote to forkSession", "提升为 forkSession"],
 					"Back without saving": ["Back without saving", "返回并不保存"],
 					"Preview context hydration": ["Preview context hydration", "预览上下文注入"],
@@ -148,10 +221,26 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 			input: async () => commandInputs.shift(),
 		},
 		sendMessage: vi.fn((message, options) => {
+			idle = !(options && typeof options === "object" && "triggerTurn" in options && options.triggerTurn);
 			commandMessages.push({ message, options });
 		}),
 		sendUserMessage: vi.fn((content, options) => {
 			commandUserMessages.push({ content, options });
+		}),
+		fork: vi.fn(async (entryId, options) => {
+			commandForkCalls.push({ entryId, options });
+			const freshCtx = makeCommandContext(repo);
+			freshCtx.sendMessage = vi.fn((message, sendOptions) => {
+				commandForkMessages.push({ message, options: sendOptions });
+			});
+			freshCtx.sendUserMessage = vi.fn((content, sendOptions) => {
+				commandForkUserMessages.push({ content, options: sendOptions });
+			});
+			await options?.withSession?.(freshCtx as never);
+			return {
+				cancelled: false,
+				sessionFile: join(repo, ".hutao", "sessions", String(options?.sessionId), "native-session.jsonl"),
+			};
 		}),
 		appendEntry: vi.fn((customType, data) => {
 			commandAppendedEntries.push({ customType, data });
@@ -172,6 +261,10 @@ afterEach(() => {
 	commandInputs.length = 0;
 	commandUserMessages.length = 0;
 	commandMessages.length = 0;
+	commandForkMessages.length = 0;
+	commandForkUserMessages.length = 0;
+	commandForkCalls.length = 0;
+	commandAssistantReplies.length = 0;
 	commandAppendedEntries.length = 0;
 	commandSwitches.length = 0;
 	commandSelectCalls.length = 0;
@@ -941,6 +1034,62 @@ describe("Hutao integration safety", () => {
 		expect(commandAppendedEntries).toHaveLength(0);
 		expect(readSessionEvents(repo, recorder.getSessionId())).toHaveLength(eventsBefore.length);
 		expect(commandNotifications.at(-1)).toContain("canonical history: not written");
+	});
+
+	it("writes full_qa inquiry context into the fresh fork native context without polluting promptings", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder, nativeEntryId, prompting } = await recordNativeLinkedPrompting(
+			repo,
+			"explain native-linked prompting",
+		);
+		const eventsBefore = readSessionEvents(repo, recorder.getSessionId());
+		commandAssistantReplies.push("This prompting was linked to a native user entry and is safe to explain.");
+
+		commandSelections.push(
+			String(prompting.id).slice(0, 20),
+			"Ask about this prompting in read-only mode",
+			"Ask a read-only question",
+			"Create forkSession and continue",
+			"Attach full Q/A as untrusted context",
+		);
+		commandInputs.push("Why is this prompting safe to fork?", "Continue with a careful implementation");
+
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandMessages).toHaveLength(1);
+		expect(commandMessages[0].message.customType).toBe("hutao_ephemeral_read_only_inquiry");
+		expect(commandUserMessages).toHaveLength(0);
+		expect(commandForkCalls).toHaveLength(1);
+		expect(commandForkCalls[0].entryId).toBe(nativeEntryId);
+		expect(commandForkMessages).toHaveLength(1);
+		expect(commandForkMessages[0].message.customType).toBe("hutao_ephemeral_inquiry_context_attachment");
+		expect(commandForkMessages[0].options).toBeUndefined();
+		expect(commandForkMessages[0].message.content).toContain("untrusted historical evidence");
+		expect(commandForkMessages[0].message.content).toContain("not a system instruction");
+		expect(commandForkMessages[0].message.content).toContain("not a prompting");
+		expect(commandForkMessages[0].message.content).toContain("Why is this prompting safe to fork?");
+		expect(commandForkMessages[0].message.content).toContain(
+			"This prompting was linked to a native user entry and is safe to explain.",
+		);
+		expect(commandForkMessages[0].message.details).toMatchObject({
+			type: "fork_context_attachment",
+			source: "ephemeral_inquiry",
+			attachment_mode: "full_qa",
+			trusted: false,
+			anchor: { type: "prompting", id: prompting.id },
+			question: "Why is this prompting safe to fork?",
+			answer: "This prompting was linked to a native user entry and is safe to explain.",
+		});
+		expect(commandForkUserMessages).toEqual([
+			{ content: "Continue with a careful implementation", options: undefined },
+		]);
+		expect(String(commandForkUserMessages[0].content)).not.toContain("This prompting was linked");
+		expect(readSessionEvents(repo, recorder.getSessionId())).toHaveLength(eventsBefore.length);
+		const forkSessionId = String((commandForkCalls[0].options as { sessionId?: string }).sessionId);
+		const forkEvents = readSessionEvents(repo, forkSessionId);
+		expect(forkEvents.some((event) => event.type === "fork_session")).toBe(true);
+		expect(forkEvents.some((event) => event.type === "prompting")).toBe(false);
 	});
 
 	it("shows subagent records in the prompting tree and opens subagent details", async () => {

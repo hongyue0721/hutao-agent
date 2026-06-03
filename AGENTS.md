@@ -6296,14 +6296,23 @@ ephemeral-inquiry/transcript-tracker.ts
   records before-entry ids so old assistant messages are ignored
   combines append-entry capture, idle state, pending-message state, waitForIdle, and timeout-safe fallback
 
+fork-startup-context.ts
+  owns writing startup context into the fresh fork native context
+  writes custom context attachment before optional follow-up user message
+  preserves full_qa as custom context attachment, not a user prompting
+  pre-fills retry text only when no follow-up was sent and the editor is empty
+
 runCoordinatedFork
-  accepts optional contextAttachment and writes it into fresh fork native context before optional follow-up user message
+  accepts optional contextAttachment
+  obtains the fresh fork context from HutaoForkCoordinator / NativeForkManager
+  delegates attachment, follow-up, and retry text handling to fork-startup-context.ts
 ```
 
 Do not regress to:
 
 ```text
 commands.ts nested inquiry if/else spaghetti
+contextAttachment / followUpMessage write ordering reimplemented inline in commands.ts
 full_qa folded into followUpMessage
 Esc silently discarding without a menu
 post-answer state with no explicit action menu
@@ -6315,15 +6324,15 @@ summary mode pretending to exist before it is implemented
 Latest local verification for this change:
 
 ```bash
-npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-transcript-tracker.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/subagent-read-model.test.ts
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-transcript-tracker.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/fork-startup-context.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/subagent-read-model.test.ts
 npm run check
 ```
 
 Observed result:
 
 ```text
-9 Hutao test files passed
-91 Hutao tests passed
+10 Hutao test files passed
+95 Hutao tests passed
 npm run check passed
 ```
 
@@ -6346,4 +6355,8 @@ When modifying this feature later, keep or add tests for:
 12. Summary attachment remains unimplemented unless added as an explicit new attachment mode with tests.
 13. transcript-tracker waits for newly appended assistant entries and ignores old assistant messages.
 14. transcript-tracker safely degrades when sessionManager / onAppendEntry is unavailable.
+15. fork-startup-context writes contextAttachment before follow-up user message.
+16. fork-startup-context does not overwrite existing editor text with retry text.
+17. integration coverage proves full_qa reaches the fresh fork native context as hutao_ephemeral_inquiry_context_attachment.
+18. integration coverage proves full_qa is not folded into the follow-up user message and does not create prompting facts in the source session.
 ```

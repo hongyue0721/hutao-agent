@@ -10,6 +10,7 @@ import type { EphemeralInquiryContextAttachment, EphemeralInquiryPromotionOption
 import { EphemeralInquiryFlow } from "./ephemeral-inquiry/flow.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
+import { applyForkStartupContext } from "./fork-startup-context.ts";
 import { GitAdapter } from "./git-adapter.ts";
 import { GitBranchPolicy, type GitBranchPolicyMode, parseGitBranchPolicyMode } from "./git-branch-policy.ts";
 import { buildGitCommitProjection } from "./git-projection.ts";
@@ -465,25 +466,26 @@ async function runCoordinatedFork(
 		}
 	}
 	if (forkContext) {
-		notify(forkContext, title, [
-			`Created forkSession ${result.sessionId}`,
-			`native branch: ${result.nativeStatus ?? "unknown"}`,
-			result.nativeSessionFile ? `native session: ${result.nativeSessionFile}` : "native session: unknown",
+		const startupNotes = [
+			options.contextAttachment ? "Context attachment will be written in the forkSession." : undefined,
 			options.followUpMessage
 				? "Follow-up message will be sent in the forkSession."
 				: result.retryText
 					? "Retry text is available from the original prompting."
 					: "Continue chatting normally.",
+		].filter((line): line is string => Boolean(line));
+		notify(forkContext, title, [
+			`Created forkSession ${result.sessionId}`,
+			`native branch: ${result.nativeStatus ?? "unknown"}`,
+			result.nativeSessionFile ? `native session: ${result.nativeSessionFile}` : "native session: unknown",
+			...startupNotes,
 			"New promptings/runs/edits will be recorded in the forkSession.",
 		]);
-		if (options.contextAttachment) {
-			await forkContext.sendMessage(options.contextAttachment);
-		}
-		if (options.followUpMessage) {
-			await forkContext.sendUserMessage(options.followUpMessage);
-		} else if (result.retryText && !forkContext.ui.getEditorText().trim()) {
-			forkContext.ui.setEditorText(result.retryText);
-		}
+		await applyForkStartupContext(forkContext, {
+			contextAttachment: options.contextAttachment,
+			followUpMessage: options.followUpMessage,
+			retryText: result.retryText,
+		});
 	} else if (result.nativeStatus !== "created") {
 		notify(
 			ctx,
