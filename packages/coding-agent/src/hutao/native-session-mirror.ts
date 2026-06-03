@@ -55,7 +55,7 @@ function sanitizeRepoLocalText(text: string, repoRoot: string): string {
 		);
 	}
 	result = result.replace(/[A-Za-z]:[\\/][^\s"'`<>)]*/g, "[external-path-redacted]");
-	result = result.replace(/(^|[\s("'])\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/g, (match, prefix) => {
+	result = result.replace(/(^|[\s("'])\/(?:Users|home|mnt|Volumes|OneDrive)\/[^\s"'`<>)]*/g, (_match, prefix) => {
 		return `${prefix}[external-path-redacted]`;
 	});
 	return redactSecrets(result);
@@ -107,7 +107,7 @@ function appendMissingEntries(path: string, snapshot: NativeSessionMirrorSnapsho
 	if (missing.length === 0) return;
 	appendFileSync(
 		path,
-		missing.map((entry) => JSON.stringify(sanitizeRepoLocalEntry(entry, snapshot.repoRoot))).join("\n") + "\n",
+		`${missing.map((entry) => JSON.stringify(sanitizeRepoLocalEntry(entry, snapshot.repoRoot))).join("\n")}\n`,
 		"utf-8",
 	);
 }
@@ -121,7 +121,10 @@ export function mirrorNativeSessionSnapshot(snapshot: NativeSessionMirrorSnapsho
 	return target;
 }
 
-export function mirrorNativeSessionEntry(snapshot: NativeSessionMirrorSnapshot, entry: SessionEntry): string | undefined {
+export function mirrorNativeSessionEntry(
+	snapshot: NativeSessionMirrorSnapshot,
+	entry: SessionEntry,
+): string | undefined {
 	const target = mirrorNativeSessionSnapshot(snapshot);
 	if (!target || isRepoLocalNativeSessionFile(snapshot.repoRoot, snapshot.nativeSessionFile)) return target;
 	const existingIds = readExistingIds(target);

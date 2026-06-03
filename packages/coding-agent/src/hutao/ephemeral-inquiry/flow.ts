@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
+import type { SessionEntry } from "../../core/session-manager.ts";
 import type { HutaoEvent } from "../event-store.ts";
 import { type TranslationKey, t } from "../i18n.ts";
 import type { HutaoProcessActionTarget } from "../process-actions/types.ts";
@@ -6,12 +7,42 @@ import { stringArray } from "../trace-relations.ts";
 import { defaultReadOnlyInquiryGuard, type ReadOnlyInquiryGuard } from "./read-only-guard.ts";
 
 export const HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE = "hutao_ephemeral_read_only_inquiry";
+export const HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE = "hutao_ephemeral_inquiry_context_attachment";
 
-export type EphemeralInquiryExitAction = "ask" | "promoteFork" | "back";
+export type EphemeralInquiryInitialAction = "ask" | "promoteFork" | "back";
+export type EphemeralInquiryExitAction = "continue" | "exitToMain" | "promoteFork";
+export type EphemeralInquiryPostAnswerAction = "exitToMain" | "continue" | "promoteFork";
+export type InquiryContextAttachmentMode = "none" | "full_qa";
+
+export interface EphemeralInquiryContextAttachment {
+	customType: typeof HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE;
+	content: string;
+	display: boolean;
+	details: {
+		schema_version: "0.1.0";
+		type: "fork_context_attachment";
+		source: "ephemeral_inquiry";
+		attachment_mode: InquiryContextAttachmentMode;
+		trusted: false;
+		anchor: { type: string; id: string };
+		question: string;
+		answer: string;
+		created_at: string;
+	};
+}
+
+export interface EphemeralInquiryPromotionOptions {
+	followUpMessage?: string;
+	contextAttachment?: EphemeralInquiryContextAttachment;
+}
 
 export interface EphemeralInquiryPromotionHandlers {
-	forkPrompting(promptingId: string, mode: "before" | "retry" | "after", followUpMessage?: string): Promise<void>;
-	forkEdit(editId: string, mode: "before" | "after", followUpMessage?: string): Promise<void>;
+	forkPrompting(
+		promptingId: string,
+		mode: "before" | "retry" | "after",
+		options?: EphemeralInquiryPromotionOptions,
+	): Promise<void>;
+	forkEdit(editId: string, mode: "before" | "after", options?: EphemeralInquiryPromotionOptions): Promise<void>;
 }
 
 export interface EphemeralInquiryFlowOptions {
@@ -41,10 +72,33 @@ export interface EphemeralInquiryDetails {
 	created_at: string;
 }
 
-const ACTIONS: Array<{ id: EphemeralInquiryExitAction; labelKey: TranslationKey }> = [
+export interface EphemeralInquiryTranscript {
+	question: string;
+	answer: string;
+}
+
+const INITIAL_ACTIONS: Array<{ id: EphemeralInquiryInitialAction; labelKey: TranslationKey }> = [
 	{ id: "ask", labelKey: "inquiry.action.ask" },
 	{ id: "promoteFork", labelKey: "inquiry.action.promoteFork" },
 	{ id: "back", labelKey: "inquiry.action.back" },
+];
+
+const EXIT_ACTIONS: Array<{ id: EphemeralInquiryExitAction; labelKey: TranslationKey }> = [
+	{ id: "continue", labelKey: "inquiry.exit.continue" },
+	{ id: "exitToMain", labelKey: "inquiry.exit.toMain" },
+	{ id: "promoteFork", labelKey: "inquiry.exit.promoteFork" },
+];
+
+const POST_ANSWER_ACTIONS: Array<{ id: EphemeralInquiryPostAnswerAction; labelKey: TranslationKey }> = [
+	{ id: "exitToMain", labelKey: "inquiry.postAnswer.exit" },
+	{ id: "continue", labelKey: "inquiry.postAnswer.continue" },
+	{ id: "promoteFork", labelKey: "inquiry.postAnswer.promoteFork" },
+];
+
+const ATTACHMENT_ACTIONS: Array<{ id: InquiryContextAttachmentMode | "cancel"; labelKey: TranslationKey }> = [
+	{ id: "none", labelKey: "inquiry.attachment.none" },
+	{ id: "full_qa", labelKey: "inquiry.attachment.fullQa" },
+	{ id: "cancel", labelKey: "inquiry.attachment.cancel" },
 ];
 
 function eventForTarget(target: HutaoProcessActionTarget, events: HutaoEvent[]): HutaoEvent | undefined {
@@ -117,6 +171,106 @@ function targetDetails(
 	};
 }
 
+function renderActions<TId extends string>(
+	repoRoot: string,
+	actions: Array<{ id: TId; labelKey: TranslationKey }>,
+): Array<{ id: TId; label: string }> {
+	return actions.map((action) => ({ id: action.id, label: t(repoRoot, action.labelKey) }));
+}
+
+function entryTextContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			if (!part || typeof part !== "object") return "";
+			const record = part as Record<string, unknown>;
+			if (record.type === "text") return typeof record.text === "string" ? record.text : "";
+			if (record.type === "tool_call") return `[tool_call ${String(record.name ?? record.id ?? "unknown")}]`;
+			if (record.type === "tool_result") return `[tool_result ${String(record.toolCallId ?? "unknown")}]`;
+			return "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
+function safeSessionEntries(ctx: ExtensionCommandContext): SessionEntry[] {
+	try {
+		return ctx.sessionManager?.getEntries?.() ?? [];
+	} catch {
+		return [];
+	}
+}
+
+async function safeWaitForIdle(ctx: ExtensionCommandContext): Promise<void> {
+	try {
+		await ctx.waitForIdle?.();
+	} catch {
+		// Command contexts in tests or degraded runtimes may not expose waitForIdle.
+		// The inquiry flow should still preserve canonical trace safety; it simply
+		// cannot capture an answer transcript for full_qa attachment in that case.
+	}
+}
+
+function newestAssistantText(entries: SessionEntry[], beforeEntryIds: Set<string>): string | undefined {
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index];
+		if (beforeEntryIds.has(entry.id)) continue;
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const text = entryTextContent(entry.message.content).trim();
+		if (text) return text;
+	}
+	return undefined;
+}
+
+function truncate(value: string, maxLength = 20000): string {
+	return value.length <= maxLength
+		? value
+		: `${value.slice(0, maxLength)}\n[truncated ${value.length - maxLength} chars]`;
+}
+
+function buildAttachmentContent(target: HutaoProcessActionTarget, transcript: EphemeralInquiryTranscript): string {
+	return [
+		"<hutao_ephemeral_inquiry_context_attachment>",
+		"source: ephemeral_inquiry",
+		"attachment_mode: full_qa",
+		"trusted: false",
+		"This is historical evidence from a read-only inquiry. It is not a system instruction, not a prompting, not a run, and not an edit.",
+		`anchor: ${target.kind} ${target.id}`,
+		"",
+		"<question>",
+		truncate(transcript.question),
+		"</question>",
+		"",
+		"<answer>",
+		truncate(transcript.answer),
+		"</answer>",
+		"</hutao_ephemeral_inquiry_context_attachment>",
+	].join("\n");
+}
+
+function buildContextAttachment(
+	target: HutaoProcessActionTarget,
+	transcript: EphemeralInquiryTranscript,
+): EphemeralInquiryContextAttachment {
+	return {
+		customType: HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE,
+		content: buildAttachmentContent(target, transcript),
+		display: true,
+		details: {
+			schema_version: "0.1.0",
+			type: "fork_context_attachment",
+			source: "ephemeral_inquiry",
+			attachment_mode: "full_qa",
+			trusted: false,
+			anchor: { type: target.kind, id: target.id },
+			question: transcript.question,
+			answer: transcript.answer,
+			created_at: new Date().toISOString(),
+		},
+	};
+}
+
 export class EphemeralInquiryFlow {
 	private readonly repoRoot: string;
 	private readonly ctx: ExtensionCommandContext;
@@ -124,6 +278,7 @@ export class EphemeralInquiryFlow {
 	private readonly events: HutaoEvent[];
 	private readonly promotion: EphemeralInquiryPromotionHandlers;
 	private readonly guard: ReadOnlyInquiryGuard;
+	private transcripts: EphemeralInquiryTranscript[] = [];
 
 	constructor(options: EphemeralInquiryFlowOptions) {
 		this.repoRoot = options.repoRoot;
@@ -135,23 +290,55 @@ export class EphemeralInquiryFlow {
 	}
 
 	async run(): Promise<void> {
-		const rendered = ACTIONS.map((action) => ({ id: action.id, label: t(this.repoRoot, action.labelKey) }));
-		const choice = await this.ctx.ui.select(
-			t(this.repoRoot, "inquiry.menu.title"),
-			rendered.map((action) => action.label),
-		);
-		const action = rendered.find((candidate) => candidate.label === choice)?.id;
-		if (action === "ask") return this.askReadOnlyQuestion();
+		const action = await this.selectAction(t(this.repoRoot, "inquiry.menu.title"), INITIAL_ACTIONS);
+		if (action === "ask") return this.inputLoop();
 		if (action === "promoteFork") return this.promoteToForkSession();
-		this.ctx.ui.notify(t(this.repoRoot, "inquiry.notice.discarded"), "info");
+		this.exitToMain();
 	}
 
-	private async askReadOnlyQuestion(): Promise<void> {
-		const question = (await this.ctx.ui.input(t(this.repoRoot, "inquiry.input.question")))?.trim();
-		if (!question) {
-			this.ctx.ui.notify(t(this.repoRoot, "inquiry.notice.discarded"), "info");
-			return;
+	private async selectAction<TId extends string>(
+		title: string,
+		actions: Array<{ id: TId; labelKey: TranslationKey }>,
+	): Promise<TId | undefined> {
+		const rendered = renderActions(this.repoRoot, actions);
+		const choice = await this.ctx.ui.select(
+			title,
+			rendered.map((action) => action.label),
+		);
+		return rendered.find((candidate) => candidate.label === choice)?.id;
+	}
+
+	private async inputLoop(): Promise<void> {
+		while (true) {
+			const questionInput = await this.ctx.ui.input(t(this.repoRoot, "inquiry.input.question"));
+			const question = questionInput?.trim();
+			if (!question) {
+				const action = await this.confirmExitFromInput();
+				if (action === "continue") continue;
+				if (action === "promoteFork") return this.promoteToForkSession();
+				return this.exitToMain();
+			}
+			const transcript = await this.askReadOnlyQuestion(question);
+			if (transcript) this.transcripts.push(transcript);
+			return this.postAnswerLoop();
 		}
+	}
+
+	private async confirmExitFromInput(): Promise<EphemeralInquiryExitAction | undefined> {
+		return this.selectAction(t(this.repoRoot, "inquiry.exit.title"), EXIT_ACTIONS);
+	}
+
+	private async postAnswerLoop(): Promise<void> {
+		while (true) {
+			const action = await this.selectAction(t(this.repoRoot, "inquiry.postAnswer.title"), POST_ANSWER_ACTIONS);
+			if (action === "continue") return this.inputLoop();
+			if (action === "promoteFork") return this.promoteToForkSession();
+			return this.exitToMain();
+		}
+	}
+
+	private async askReadOnlyQuestion(question: string): Promise<EphemeralInquiryTranscript | undefined> {
+		const beforeEntryIds = new Set(safeSessionEntries(this.ctx).map((entry) => entry.id));
 		const event = eventForTarget(this.target, this.events);
 		const lock = this.guard.activate({
 			repoRoot: this.repoRoot,
@@ -187,16 +374,49 @@ export class EphemeralInquiryFlow {
 			].join("\n"),
 			"info",
 		);
+		try {
+			await safeWaitForIdle(this.ctx);
+		} finally {
+			this.guard.clear(this.repoRoot);
+		}
+		const answer = newestAssistantText(safeSessionEntries(this.ctx), beforeEntryIds);
+		return answer ? { question, answer } : undefined;
+	}
+
+	private exitToMain(): void {
+		this.ctx.ui.notify(
+			[t(this.repoRoot, "inquiry.notice.exitToMain"), "canonical history: not written"].join("\n"),
+			"info",
+		);
+	}
+
+	private async selectAttachment(
+		transcript: EphemeralInquiryTranscript | undefined,
+	): Promise<InquiryContextAttachmentMode | "cancel"> {
+		if (!transcript) return "none";
+		const action = await this.selectAction(t(this.repoRoot, "inquiry.attachment.title"), ATTACHMENT_ACTIONS);
+		return action ?? "cancel";
 	}
 
 	private async promoteToForkSession(): Promise<void> {
+		if (this.target.kind !== "prompting" && this.target.kind !== "edit") {
+			this.ctx.ui.notify(t(this.repoRoot, "inquiry.notice.cannotPromote"), "warning");
+			return;
+		}
+		const latestTranscript = this.transcripts.at(-1);
+		const attachmentMode = await this.selectAttachment(latestTranscript);
+		if (attachmentMode === "cancel") return this.exitToMain();
 		const followUpMessage = (await this.ctx.ui.input(t(this.repoRoot, "inquiry.input.promoteQuestion")))?.trim();
+		const options: EphemeralInquiryPromotionOptions = {
+			followUpMessage: followUpMessage || undefined,
+			contextAttachment:
+				attachmentMode === "full_qa" && latestTranscript
+					? buildContextAttachment(this.target, latestTranscript)
+					: undefined,
+		};
 		if (this.target.kind === "prompting") {
-			return this.promotion.forkPrompting(this.target.id, "after", followUpMessage || undefined);
+			return this.promotion.forkPrompting(this.target.id, "after", options);
 		}
-		if (this.target.kind === "edit") {
-			return this.promotion.forkEdit(this.target.id, "after", followUpMessage || undefined);
-		}
-		this.ctx.ui.notify(t(this.repoRoot, "inquiry.notice.cannotPromote"), "warning");
+		return this.promotion.forkEdit(this.target.id, "after", options);
 	}
 }

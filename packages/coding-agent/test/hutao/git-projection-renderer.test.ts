@@ -76,7 +76,9 @@ describe("git projection renderer", () => {
 
 		const text = lines.join("\n");
 		expect(text).toContain("HEAD: abc123");
-		expect(text).toContain("Commit abc123 links=1 method=explicit_command confidence=high promptings=1 runs=1 edits=1 merges=0 conflicts=0 reverts=0 forks=0");
+		expect(text).toContain(
+			"Commit abc123 links=1 method=explicit_command confidence=high promptings=1 runs=1 edits=1 merges=0 conflicts=0 reverts=0 forks=0",
+		);
 		expect(text).not.toContain("Commit def456");
 	});
 });

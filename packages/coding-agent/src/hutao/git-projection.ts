@@ -114,7 +114,8 @@ export function applyTreeDisplayLabel(mode: unknown): string {
 
 export function buildGitCommitProjection(events: HutaoEvent[], commit: string, query = commit): HutaoGitProjection {
 	const links = events.filter(
-		(event) => event.type === "commit_link" && (String(event.commit) === commit || String(event.commit).startsWith(query)),
+		(event) =>
+			event.type === "commit_link" && (String(event.commit) === commit || String(event.commit).startsWith(query)),
 	);
 	const evidence = links.map(commitLinkEvidence);
 	const promptingIds = new Set(links.flatMap((event) => stringArray(event.prompting_ids)));
@@ -123,7 +124,8 @@ export function buildGitCommitProjection(events: HutaoEvent[], commit: string, q
 	const sessionIds = new Set(links.map((event) => stringField(event, "session_id")).filter(Boolean));
 
 	for (const event of events) {
-		if (event.type === "prompting" && promptingIds.has(String(event.id))) sessionIds.add(stringField(event, "session_id"));
+		if (event.type === "prompting" && promptingIds.has(String(event.id)))
+			sessionIds.add(stringField(event, "session_id"));
 		if ((event.type === "run_finished" || event.type === "run_started") && runIds.has(String(event.id))) {
 			const parentPrompting = stringField(event, "parent_prompting");
 			if (parentPrompting) promptingIds.add(parentPrompting);
@@ -154,7 +156,9 @@ export function buildGitCommitProjection(events: HutaoEvent[], commit: string, q
 				sessionIds.has(forkSessionId(event)) ||
 				(sourceType === "prompting" && promptingIds.has(sourceId)) ||
 				(sourceType === "edit" && editIds.has(sourceId)) ||
-				(sourceType === "commit" && Boolean(sourceId) && (commit.startsWith(sourceId) || sourceId.startsWith(query)))
+				(sourceType === "commit" &&
+					Boolean(sourceId) &&
+					(commit.startsWith(sourceId) || sourceId.startsWith(query)))
 			);
 		}),
 	);

@@ -112,7 +112,12 @@ async function createRecorder(
 	}
 	const currentMetadata = currentSessionId ? registry.readSession(currentSessionId) : undefined;
 	state.recorderRepoRoot = repoRoot;
-	state.recorder = new TraceRecorder(repoRoot, currentMetadata, currentSessionId, createNativeContextProvider(ctx, state));
+	state.recorder = new TraceRecorder(
+		repoRoot,
+		currentMetadata,
+		currentSessionId,
+		createNativeContextProvider(ctx, state),
+	);
 	await state.recorder.init();
 	const traceSessionId = state.recorder.getSessionId();
 	state.nativeMirrorSessionFile = refreshNativeMirror(ctx, repoRoot, traceSessionId);

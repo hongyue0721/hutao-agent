@@ -6,13 +6,14 @@ import { buildConversationHydration } from "./conversation-hydrator.ts";
 import { renderConversationTimeline } from "./conversation-renderer.ts";
 import { ConversationStore } from "./conversation-store.ts";
 import { collectHutaoDoctorDiagnostics } from "./doctor-diagnostics.ts";
+import type { EphemeralInquiryContextAttachment, EphemeralInquiryPromotionOptions } from "./ephemeral-inquiry/flow.ts";
 import { EphemeralInquiryFlow } from "./ephemeral-inquiry/flow.ts";
 import type { HutaoEvent } from "./event-store.ts";
 import { HutaoForkCoordinator, type HutaoForkResult } from "./fork-coordinator.ts";
 import { GitAdapter } from "./git-adapter.ts";
+import { GitBranchPolicy, type GitBranchPolicyMode, parseGitBranchPolicyMode } from "./git-branch-policy.ts";
 import { buildGitCommitProjection } from "./git-projection.ts";
 import { renderGitCommitProjection, renderGitGraphProjection } from "./git-projection-renderer.ts";
-import { GitBranchPolicy, type GitBranchPolicyMode, parseGitBranchPolicyMode } from "./git-branch-policy.ts";
 import { defaultHistoricalContinuationCoordinator } from "./historical-continuation-coordinator.ts";
 import { getHutaoLanguage, type HutaoLanguage, saveHutaoLanguage, selectAction, t } from "./i18n.ts";
 import { rebuildIndex } from "./index-builder.ts";
@@ -246,10 +247,6 @@ async function runPromptingTree(
 	return runProcessNodeAction(selected.node, repoRoot, events, ctx);
 }
 
-function renderMergeLine(event: HutaoEvent): string {
-	return `${shortId(event.id)} ${event.mode ?? ""} ${event.status ?? ""} source=${shortId(event.source_session)} applied=${stringArray(event.applied_edits).length} conflicts=${stringArray(event.conflict_edits).length} resolutions=${stringArray(event.resolution_edits).join(",") || "none"}`;
-}
-
 function pushEventList(
 	lines: string[],
 	title: string,
@@ -414,7 +411,11 @@ async function runCoordinatedFork(
 	sourceId: string,
 	mode: "before" | "retry" | "after",
 	title = "Hutao fork",
-	options: { followUpMessage?: string; gitBranchPolicyMode?: GitBranchPolicyMode } = {},
+	options: {
+		followUpMessage?: string;
+		gitBranchPolicyMode?: GitBranchPolicyMode;
+		contextAttachment?: EphemeralInquiryContextAttachment;
+	} = {},
 ): Promise<HutaoForkResult> {
 	let forkContext: ExtensionCommandContext | undefined;
 	const result = await new HutaoForkCoordinator(repoRoot, ctx).fork({
@@ -475,6 +476,9 @@ async function runCoordinatedFork(
 					: "Continue chatting normally.",
 			"New promptings/runs/edits will be recorded in the forkSession.",
 		]);
+		if (options.contextAttachment) {
+			await forkContext.sendMessage(options.contextAttachment);
+		}
 		if (options.followUpMessage) {
 			await forkContext.sendUserMessage(options.followUpMessage);
 		} else if (result.retryText && !forkContext.ui.getEditorText().trim()) {
@@ -488,9 +492,11 @@ async function runCoordinatedFork(
 				`Created forkSession ${result.sessionId}`,
 				`native branch: ${result.nativeStatus ?? "degraded"}`,
 				result.degradedReason ?? "Native branch unavailable.",
-				options.followUpMessage
-					? "Follow-up message was not sent because no fresh native fork context is available. Open the forkSession and resend it there."
-					: "Continue chatting normally; Hutao trace will record new work in the forkSession.",
+				options.contextAttachment
+					? "Context attachment was not written because no fresh native fork context is available. Open the forkSession and attach or resend it there."
+					: options.followUpMessage
+						? "Follow-up message was not sent because no fresh native fork context is available. Open the forkSession and resend it there."
+						: "Continue chatting normally; Hutao trace will record new work in the forkSession.",
 			],
 			"warning",
 		);
@@ -952,15 +958,19 @@ function makeProcessActionHandlers(
 				target,
 				events,
 				promotion: {
-					forkPrompting: async (promptingId, mode, followUpMessage) => {
-						await runCoordinatedFork(repoRoot, ctx, "prompting", promptingId, mode, "Hutao inquiry promotion", {
-							followUpMessage,
-						});
+					forkPrompting: async (promptingId, mode, options: EphemeralInquiryPromotionOptions | undefined) => {
+						await runCoordinatedFork(
+							repoRoot,
+							ctx,
+							"prompting",
+							promptingId,
+							mode,
+							"Hutao inquiry promotion",
+							options,
+						);
 					},
-					forkEdit: async (editId, mode, followUpMessage) => {
-						await runCoordinatedFork(repoRoot, ctx, "edit", editId, mode, "Hutao inquiry promotion", {
-							followUpMessage,
-						});
+					forkEdit: async (editId, mode, options: EphemeralInquiryPromotionOptions | undefined) => {
+						await runCoordinatedFork(repoRoot, ctx, "edit", editId, mode, "Hutao inquiry promotion", options);
 					},
 				},
 			}).run(),
@@ -1399,8 +1409,6 @@ export async function gitCommand(args: string, ctx: ExtensionCommandContext): Pr
 	const git = new GitAdapter(repoRoot);
 	const events = readEvents(repoRoot);
 	const promptings = events.filter((event) => event.type === "prompting");
-	const edits = events.filter((event) => event.type === "edit");
-	const runs = events.filter((event) => event.type === "run_finished");
 	const commitLinks = events.filter((event) => event.type === "commit_link");
 	if (!query) {
 		const choice = await selectAction(ctx, repoRoot, "git.menu.title", [
@@ -1426,7 +1434,9 @@ export async function gitCommand(args: string, ctx: ExtensionCommandContext): Pr
 		const logArgs = ["log", "--oneline", "--decorate", "--graph", range];
 		if (fileFilter) logArgs.push("--", fileFilter);
 		const graph = await git.run(logArgs, { maxBuffer: 5 * 1024 * 1024 });
-		const graphLines = graph.ok ? graph.stdout.trim().split(/\r?\n/).slice(0, 60) : [graph.stderr || "git log failed"];
+		const graphLines = graph.ok
+			? graph.stdout.trim().split(/\r?\n/).slice(0, 60)
+			: [graph.stderr || "git log failed"];
 		const lines = renderGitGraphProjection({
 			events,
 			head: (await git.getHead()) ?? "unknown",

@@ -564,7 +564,6 @@ describe("Hutao integration safety", () => {
 		expect(notification).toContain("confirmed=yes");
 	});
 
-
 	it("records revert preview and completion as native custom entries", async () => {
 		const repo = makeTempDir();
 		const git = await initRepo(repo);
@@ -872,7 +871,11 @@ describe("Hutao integration safety", () => {
 		const prompting = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting");
 		expect(prompting?.id).toBeDefined();
 
-		commandSelections.push(String(prompting?.id).slice(0, 20), String(prompting?.id).slice(0, 20), "View original input");
+		commandSelections.push(
+			String(prompting?.id).slice(0, 20),
+			String(prompting?.id).slice(0, 20),
+			"View original input",
+		);
 		await promptingCommand("", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-3)?.title).toBe("Hutao prompting tree");

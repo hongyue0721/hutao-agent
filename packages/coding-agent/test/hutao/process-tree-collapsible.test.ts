@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildCollapsibleProcessTree, selectCollapsibleProcessTreeNode } from "../../src/hutao/process-tree/collapsible.ts";
 import { flattenNodes } from "../../src/hutao/process-tree/builder.ts";
+import {
+	buildCollapsibleProcessTree,
+	selectCollapsibleProcessTreeNode,
+} from "../../src/hutao/process-tree/collapsible.ts";
 import type { HutaoProcessTreeNode } from "../../src/hutao/process-tree/types.ts";
 
-function node(fields: Partial<HutaoProcessTreeNode> & Pick<HutaoProcessTreeNode, "kind" | "id" | "label">): HutaoProcessTreeNode {
+function node(
+	fields: Partial<HutaoProcessTreeNode> & Pick<HutaoProcessTreeNode, "kind" | "id" | "label">,
+): HutaoProcessTreeNode {
 	return {
 		depth: 0,
 		nodeId: `${fields.kind}:${fields.id}`,
@@ -70,9 +75,7 @@ describe("collapsible process tree", () => {
 		expect(visible.find((entry) => entry.id === "p_1")?.label).toContain(
 			"Prompting p_1 fix auth (runs=1 edits=1 commits=1)",
 		);
-		expect(visible.find((entry) => entry.id === "m_1")?.label).toContain(
-			"Merge m_1 apply_edits completed (edits=1)",
-		);
+		expect(visible.find((entry) => entry.id === "m_1")?.label).toContain("Merge m_1 apply_edits completed (edits=1)");
 	});
 
 	it("reveals expanded descendants one level at a time", () => {

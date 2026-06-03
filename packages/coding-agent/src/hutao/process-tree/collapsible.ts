@@ -190,7 +190,11 @@ function summaryForNode(
 	node: HutaoProcessTreeNode,
 	childrenByParent: Map<string | undefined, HutaoProcessTreeNode[]>,
 	rules: readonly HutaoProcessTreeSummaryRule[],
-): { summary: string; descendantCounts: ReadonlyMap<HutaoProcessTreeNodeKind, number>; childCounts: ReadonlyMap<HutaoProcessTreeNodeKind, number> } {
+): {
+	summary: string;
+	descendantCounts: ReadonlyMap<HutaoProcessTreeNodeKind, number>;
+	childCounts: ReadonlyMap<HutaoProcessTreeNodeKind, number>;
+} {
 	const descendantCounts = buildCounts(node, childrenByParent, "descendants");
 	const childCounts = buildCounts(node, childrenByParent, "children");
 	const rule = ruleForNode(node, rules);
@@ -276,8 +280,9 @@ export async function selectCollapsibleProcessTreeNode(
 			expandedNodeIds,
 		});
 		if (visibleNodes.length === 0) return { status: "cancelled", expandedNodeIds, visibleNodes };
-		const labels = visibleNodes.map((node, index) =>
-			`${String(index + 1).padStart(2, "0")}. ${(input.render ?? defaultRenderOption)(node, index)}`,
+		const labels = visibleNodes.map(
+			(node, index) =>
+				`${String(index + 1).padStart(2, "0")}. ${(input.render ?? defaultRenderOption)(node, index)}`,
 		);
 		const choice = await input.select(input.title, labels);
 		if (!choice) return { status: "cancelled", expandedNodeIds, visibleNodes };

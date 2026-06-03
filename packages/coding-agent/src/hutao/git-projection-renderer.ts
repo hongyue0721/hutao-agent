@@ -94,7 +94,12 @@ export function renderGitCommitProjection(input: HutaoGitCommitRenderInput): str
 	}
 	lines.push(`Promptings: ${promptings.length}`);
 	renderPromptingTree(lines, input.events, promptings);
-	pushEventList(lines, "Runs", runs, (event) => `${shortId(event.id)} ${event.tool ?? "tool"} ${event.status ?? "unknown"}`);
+	pushEventList(
+		lines,
+		"Runs",
+		runs,
+		(event) => `${shortId(event.id)} ${event.tool ?? "tool"} ${event.status ?? "unknown"}`,
+	);
 	pushEventList(lines, "Edits", edits, (event) => `${shortId(event.id)} ${stringArray(event.files).join(", ")}`);
 	pushEventList(lines, "Related merges", projection.relations.merges, renderMergeLine);
 	pushEventList(

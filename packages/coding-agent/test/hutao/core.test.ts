@@ -84,7 +84,7 @@ describe("NativeSessionMirror", () => {
 		expect((mirrored[1] as { id?: string }).id).toBe(firstEntryId);
 
 		const secondEntryId = nativeSession.appendMessage({
-			role: "assistant",
+			role: "user",
 			content: "done from (/home/hongyue/.config/gh/hosts.yml) with masked gho_************************************",
 			timestamp: Date.now(),
 		});
