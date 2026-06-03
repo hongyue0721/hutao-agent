@@ -6137,3 +6137,204 @@ Full process tree remains the complete projection.
 Collapsible tree is only a temporary UI projection over that projection.
 Facts stay flat, views stay derived, and actions stay routed through the existing process-action executor.
 ```
+
+---
+
+## 50. Ephemeral inquiry extensible exit flow landed / 2026-06-03
+
+本节同步 `agent.md` 中的只读询问新协议，并记录本次代码实现后的真实状态。
+
+### 50.1 已实现行为
+
+Ephemeral read-only inquiry / 只询问现在必须按可拓展 flow/state-machine 理解，不再是临时菜单回调。
+
+当前已落地的状态与动作语义：
+
+```text
+initial action menu
+  - ask read-only question
+  - promote to forkSession
+  - back / exit
+
+inputting_question
+  - non-empty Enter => send read-only custom message and trigger protected turn
+  - Esc / Ctrl+C / cancelled input => explicit exit-action menu
+
+exit-action menu
+  - continue entering question
+  - exit inquiry and return to main chat
+  - create forkSession and continue
+
+running_read_only_turn
+  - read-only guard blocks tool calls
+  - command waits for idle when available
+  - assistant answer is captured from native session entries when available
+
+post-answer menu
+  - exit inquiry and return to main chat
+  - continue read-only inquiry
+  - create forkSession and continue
+
+promotion / attachment menu
+  - none
+  - full_qa
+  - cancel
+```
+
+退出语义已经固定：
+
+```text
+Exit inquiry and return to main chat
+  => close the inquiry flow
+  => restore normal main editor / main conversation input
+  => do not send a question if it was cancelled before submission
+  => do not create prompting/run/edit/session/fork facts
+  => do not synthesize a detail page return path
+```
+
+### 50.2 forkSession promotion and context attachment
+
+Promoting inquiry into forkSession is an explicit transition from explanation-only mode into code-capable continuation.
+
+Rules:
+
+```text
+1. Inquiry itself still is not a Hutao session.
+2. Inquiry itself still is not a forkSession.
+3. Inquiry itself still is not a canonical prompting.
+4. Inquiry itself does not create run/edit facts.
+5. Inquiry itself does not create a Git branch.
+6. Merely asking a read-only question must not auto-create forkSession.
+7. forkSession must anchor to the original prompting/edit node, not to a synthetic inquiry prompting.
+```
+
+Current attachment modes:
+
+```text
+none
+  Create forkSession from the original selected historical node only.
+  Do not attach inquiry Q/A.
+
+full_qa
+  Attach the complete read-only question/answer as untrusted context.
+  This attachment is a native custom message / custom context attachment.
+  It is not a user prompting, not a run, not an edit, and not a system instruction.
+```
+
+The full Q/A attachment must use the custom type:
+
+```text
+hutao_ephemeral_inquiry_context_attachment
+```
+
+and must label itself as:
+
+```text
+untrusted historical evidence
+read-only inquiry context attachment
+not a prompting
+not a run
+not an edit
+not a system instruction
+```
+
+Implementation rule:
+
+```text
+Do not concatenate full_qa attachment into the follow-up user message.
+Do not convert full_qa into canonical Hutao prompting text.
+Write it into the fresh native fork context as a custom message/context attachment.
+The optional follow-up task remains a separate user message.
+```
+
+### 50.3 First-version limits and future extension points
+
+First version intentionally does not implement automatic summary attachment.
+
+Current supported attachment modes:
+
+```text
+none
+full_qa
+```
+
+Future modes are allowed only as explicit policy extensions:
+
+```text
+summary
+selected_messages
+reviewed_attachment
+```
+
+Do not fake these future modes by silently rewriting `full_qa` or by generating hidden summaries.
+
+Future UX extensions that remain allowed but are not first-version requirements:
+
+```text
+return_to_detail
+save_local_draft
+export inquiry evidence
+multi-turn inquiry thread management
+review/edit attachment before fork
+```
+
+### 50.4 Implementation boundaries
+
+Keep the architecture modular:
+
+```text
+commands.ts
+  resolves process target and invokes EphemeralInquiryFlow only
+
+ephemeral-inquiry/flow.ts
+  owns state transitions, menus, read-only question submission, transcript capture, and attachment policy
+
+runCoordinatedFork
+  accepts optional contextAttachment and writes it into fresh fork native context before optional follow-up user message
+```
+
+Do not regress to:
+
+```text
+commands.ts nested inquiry if/else spaghetti
+full_qa folded into followUpMessage
+Esc silently discarding without a menu
+post-answer state with no explicit action menu
+summary mode pretending to exist before it is implemented
+```
+
+### 50.5 Verified tests and checks
+
+Latest local verification for this change:
+
+```bash
+npm --prefix packages/coding-agent test -- test/hutao/core.test.ts test/hutao/ephemeral-inquiry-flow.test.ts test/hutao/ephemeral-inquiry.test.ts test/hutao/git-branch-policy.test.ts test/hutao/integration.test.ts test/hutao/process-actions.test.ts test/hutao/process-tree-relations.test.ts test/hutao/subagent-read-model.test.ts
+npm run check
+```
+
+Observed result:
+
+```text
+8 Hutao test files passed
+88 Hutao tests passed
+npm run check passed
+```
+
+### 50.6 Regression requirements
+
+When modifying this feature later, keep or add tests for:
+
+```text
+1. Esc/Ctrl+C/cancelled input opens explicit exit-action menu.
+2. Exit inquiry returns to main chat/editor and writes no canonical .hutao facts.
+3. Continue entering question returns to the same inquiry input state.
+4. Submitted inquiry sends hutao_ephemeral_read_only_inquiry custom message with triggerTurn.
+5. Read-only guard blocks tool calls during inquiry turn.
+6. Post-answer menu offers exit, continue inquiry, and create forkSession.
+7. Promote-to-fork anchors to the original prompting/edit node.
+8. Attachment mode none creates forkSession without inquiry Q/A context.
+9. Attachment mode full_qa writes hutao_ephemeral_inquiry_context_attachment as untrusted native custom context.
+10. full_qa is not converted into canonical prompting/run/edit/system instruction.
+11. Optional follow-up message remains separate from full_qa attachment.
+12. Summary attachment remains unimplemented unless added as an explicit new attachment mode with tests.
+```
