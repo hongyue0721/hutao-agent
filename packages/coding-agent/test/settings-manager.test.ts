@@ -1,28 +1,26 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { cleanupTestTempDir, createTestTempDir } from "./temp-utils.ts";
 
 describe("SettingsManager", () => {
-	const testDir = join(process.cwd(), "test-settings-tmp");
-	const agentDir = join(testDir, "agent");
-	const projectDir = join(testDir, "project");
+	let testDir: string;
+	let agentDir: string;
+	let projectDir: string;
 
 	beforeEach(() => {
-		// Clean up and create fresh directories
-		if (existsSync(testDir)) {
-			rmSync(testDir, { recursive: true });
-		}
+		testDir = createTestTempDir("settings-manager");
+		agentDir = join(testDir, "agent");
+		projectDir = join(testDir, "project");
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(join(projectDir, ".pi"), { recursive: true });
 	});
 
 	afterEach(() => {
-		if (existsSync(testDir)) {
-			rmSync(testDir, { recursive: true });
-		}
+		cleanupTestTempDir(testDir);
 	});
 
 	describe("preserves externally added settings", () => {
@@ -221,7 +219,7 @@ describe("SettingsManager", () => {
 			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
 
 			// Delete the .pi folder that beforeEach created
-			rmSync(join(projectDir, ".pi"), { recursive: true });
+			cleanupTestTempDir(join(projectDir, ".pi"));
 
 			// Create SettingsManager (reads both global and project settings)
 			const manager = SettingsManager.create(projectDir, agentDir);
@@ -239,7 +237,7 @@ describe("SettingsManager", () => {
 			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
 
 			// Delete the .pi folder that beforeEach created
-			rmSync(join(projectDir, ".pi"), { recursive: true });
+			cleanupTestTempDir(join(projectDir, ".pi"));
 
 			const manager = SettingsManager.create(projectDir, agentDir);
 

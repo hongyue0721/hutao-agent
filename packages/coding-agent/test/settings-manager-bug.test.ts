@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { cleanupTestTempDir, createTestTempDir } from "./temp-utils.ts";
 
 /**
  * Tests for the fix to a bug where external file changes to arrays were overwritten.
@@ -16,22 +17,20 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
  * those fields override file values during save().
  */
 describe("SettingsManager - External Edit Preservation", () => {
-	const testDir = join(process.cwd(), "test-settings-bug-tmp");
-	const agentDir = join(testDir, "agent");
-	const projectDir = join(testDir, "project");
+	let testDir: string;
+	let agentDir: string;
+	let projectDir: string;
 
 	beforeEach(() => {
-		if (existsSync(testDir)) {
-			rmSync(testDir, { recursive: true });
-		}
+		testDir = createTestTempDir("settings-manager-bug");
+		agentDir = join(testDir, "agent");
+		projectDir = join(testDir, "project");
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(join(projectDir, ".pi"), { recursive: true });
 	});
 
 	afterEach(() => {
-		if (existsSync(testDir)) {
-			rmSync(testDir, { recursive: true });
-		}
+		cleanupTestTempDir(testDir);
 	});
 
 	it("should preserve file changes to packages array when changing unrelated setting", async () => {

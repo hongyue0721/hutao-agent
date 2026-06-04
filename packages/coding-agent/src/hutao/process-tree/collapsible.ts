@@ -1,6 +1,40 @@
 import { treePrefix } from "./helpers.ts";
 import type { HutaoProcessTreeNode, HutaoProcessTreeNodeKind } from "./types.ts";
 
+const ansi = {
+	reset: "\x1b[0m",
+	cyan: "\x1b[36m",
+	magenta: "\x1b[35m",
+	blue: "\x1b[34m",
+	green: "\x1b[32m",
+	yellow: "\x1b[33m",
+	red: "\x1b[31m",
+	brightCyan: "\x1b[96m",
+	brightMagenta: "\x1b[95m",
+} as const;
+
+const processTreeKindColors: Record<HutaoProcessTreeNodeKind, string> = {
+	session: ansi.cyan,
+	prompting: ansi.magenta,
+	subagent: ansi.brightMagenta,
+	run: ansi.blue,
+	edit: ansi.green,
+	commit: ansi.yellow,
+	merge: ansi.brightCyan,
+	fork: ansi.brightMagenta,
+	revert: ansi.yellow,
+	conflict: ansi.red,
+};
+
+function colorizeProcessTreeLabel(kind: HutaoProcessTreeNodeKind, label: string): string {
+	return `${processTreeKindColors[kind] ?? ""}${label}${ansi.reset}`;
+}
+
+function nodeStateGlyph(node: HutaoCollapsibleProcessTreeNode): string {
+	if (node.hasChildren) return node.expanded ? "▾ " : "▸ ";
+	return "• ";
+}
+
 export type HutaoProcessTreeSummaryScope = "children" | "descendants";
 
 export interface HutaoProcessTreeSummaryContext {
@@ -267,7 +301,9 @@ export function isCollapsedProcessTreeNode(node: HutaoProcessTreeNode): node is 
 }
 
 function defaultRenderOption(node: HutaoCollapsibleProcessTreeNode): string {
-	return node.label;
+	const prefixMatch = node.label.match(/^[│├└─\s]*/)?.[0] ?? "";
+	const body = node.label.slice(prefixMatch.length);
+	return `${prefixMatch}${colorizeProcessTreeLabel(node.kind, `${nodeStateGlyph(node)}${body}`)}`;
 }
 
 export async function selectCollapsibleProcessTreeNode(

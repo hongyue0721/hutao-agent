@@ -1,12 +1,11 @@
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
 import type { HutaoEvent } from "../event-store.ts";
 import { type TranslationKey, t } from "../i18n.ts";
 import type { HutaoProcessActionTarget } from "../process-actions/types.ts";
 import { stringArray } from "../trace-relations.ts";
 import { defaultReadOnlyInquiryGuard, type ReadOnlyInquiryGuard } from "./read-only-guard.ts";
-import { captureInquiryTranscript, type EphemeralInquiryTranscript } from "./transcript-tracker.ts";
-
-export type { EphemeralInquiryTranscript } from "./transcript-tracker.ts";
 
 export const HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE = "hutao_ephemeral_read_only_inquiry";
 export const HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE = "hutao_ephemeral_inquiry_context_attachment";
@@ -15,6 +14,23 @@ export type EphemeralInquiryInitialAction = "ask" | "promoteFork" | "back";
 export type EphemeralInquiryExitAction = "continue" | "exitToMain" | "promoteFork";
 export type EphemeralInquiryPostAnswerAction = "exitToMain" | "continue" | "promoteFork";
 export type InquiryContextAttachmentMode = "none" | "full_qa";
+
+export interface EphemeralInquiryRunResult {
+	answer: string;
+	modelBacked: boolean;
+	error?: string;
+}
+
+export type EphemeralInquiryRunner = (
+	ctx: ExtensionCommandContext,
+	content: string,
+) => Promise<EphemeralInquiryRunResult>;
+
+export interface EphemeralInquiryTranscript {
+	question: string;
+	answer: string;
+	assistantEntryId?: string;
+}
 
 export interface EphemeralInquiryContextAttachment {
 	customType: typeof HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE;
@@ -54,24 +70,7 @@ export interface EphemeralInquiryFlowOptions {
 	events: HutaoEvent[];
 	promotion: EphemeralInquiryPromotionHandlers;
 	guard?: ReadOnlyInquiryGuard;
-}
-
-export interface EphemeralInquiryDetails {
-	schema_version: "0.1.0";
-	type: "ephemeral_read_only_inquiry";
-	status: "read_only";
-	canonical_history: "not_written";
-	target: {
-		kind: string;
-		id: string;
-		session_id?: string;
-		parent_prompting?: string;
-		parent_run?: string;
-		files?: string[];
-	};
-	question: string;
-	guard_lock_id: string;
-	created_at: string;
+	inquiryRunner?: EphemeralInquiryRunner;
 }
 
 const INITIAL_ACTIONS: Array<{ id: EphemeralInquiryInitialAction; labelKey: TranslationKey }> = [
@@ -154,20 +153,6 @@ function buildInquiryContent(
 	].join("\n");
 }
 
-function targetDetails(
-	target: HutaoProcessActionTarget,
-	event: HutaoEvent | undefined,
-): EphemeralInquiryDetails["target"] {
-	return {
-		kind: target.kind,
-		id: target.id,
-		session_id: typeof event?.session_id === "string" ? event.session_id : undefined,
-		parent_prompting: typeof event?.parent_prompting === "string" ? event.parent_prompting : undefined,
-		parent_run: typeof event?.parent_run === "string" ? event.parent_run : undefined,
-		files: stringArray(event?.files),
-	};
-}
-
 function renderActions<TId extends string>(
 	repoRoot: string,
 	actions: Array<{ id: TId; labelKey: TranslationKey }>,
@@ -179,6 +164,64 @@ function truncate(value: string, maxLength = 20000): string {
 	return value.length <= maxLength
 		? value
 		: `${value.slice(0, maxLength)}\n[truncated ${value.length - maxLength} chars]`;
+}
+
+function assistantText(message: AssistantMessage): string {
+	return message.content
+		.map((part) => (part.type === "text" ? part.text : ""))
+		.filter(Boolean)
+		.join("\n")
+		.trim();
+}
+
+function buildPreviewAnswer(content: string): string {
+	return [
+		"No model-backed read-only answer was generated in this runtime.",
+		"The inquiry context below was prepared without writing native resume state.",
+		"",
+		content,
+	].join("\n");
+}
+
+async function runEphemeralModelInquiry(
+	ctx: ExtensionCommandContext,
+	content: string,
+): Promise<EphemeralInquiryRunResult> {
+	const model = ctx.model as Model<any> | undefined;
+	if (!model) return { answer: buildPreviewAnswer(content), modelBacked: false, error: "No model selected." };
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok) return { answer: buildPreviewAnswer(content), modelBacked: false, error: auth.error };
+	try {
+		const response = await completeSimple(
+			model,
+			{
+				systemPrompt: ctx.getSystemPrompt(),
+				messages: [{ role: "user", content: [{ type: "text", text: content }], timestamp: Date.now() }],
+				tools: [],
+			},
+			{
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+				signal: ctx.signal,
+				sessionId: undefined,
+			},
+		);
+		const answer = assistantText(response);
+		if (response.stopReason === "error" || response.stopReason === "aborted") {
+			return {
+				answer: answer || buildPreviewAnswer(content),
+				modelBacked: false,
+				error: response.errorMessage ?? response.stopReason,
+			};
+		}
+		return { answer: answer || "[empty read-only answer]", modelBacked: true };
+	} catch (error) {
+		return {
+			answer: buildPreviewAnswer(content),
+			modelBacked: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 function buildAttachmentContent(target: HutaoProcessActionTarget, transcript: EphemeralInquiryTranscript): string {
@@ -230,6 +273,7 @@ export class EphemeralInquiryFlow {
 	private readonly events: HutaoEvent[];
 	private readonly promotion: EphemeralInquiryPromotionHandlers;
 	private readonly guard: ReadOnlyInquiryGuard;
+	private readonly inquiryRunner: EphemeralInquiryRunner;
 	private transcripts: EphemeralInquiryTranscript[] = [];
 
 	constructor(options: EphemeralInquiryFlowOptions) {
@@ -239,6 +283,7 @@ export class EphemeralInquiryFlow {
 		this.events = options.events;
 		this.promotion = options.promotion;
 		this.guard = options.guard ?? defaultReadOnlyInquiryGuard;
+		this.inquiryRunner = options.inquiryRunner ?? runEphemeralModelInquiry;
 	}
 
 	async run(): Promise<void> {
@@ -291,47 +336,29 @@ export class EphemeralInquiryFlow {
 
 	private async askReadOnlyQuestion(question: string): Promise<EphemeralInquiryTranscript | undefined> {
 		const event = eventForTarget(this.target, this.events);
-		const lock = this.guard.activate({
+		this.guard.activate({
 			repoRoot: this.repoRoot,
 			targetKind: this.target.kind,
 			targetId: this.target.id,
 			question,
 		});
-		const details: EphemeralInquiryDetails = {
-			schema_version: "0.1.0",
-			type: "ephemeral_read_only_inquiry",
-			status: "read_only",
-			canonical_history: "not_written",
-			target: targetDetails(this.target, event),
-			question,
-			guard_lock_id: lock.id,
-			created_at: lock.createdAt,
-		};
 		try {
-			return await captureInquiryTranscript({
-				ctx: this.ctx,
-				question,
-				send: () => {
-					this.ctx.sendMessage(
-						{
-							customType: HUTAO_EPHEMERAL_INQUIRY_CUSTOM_TYPE,
-							content: buildInquiryContent(this.target, event, question),
-							display: true,
-							details,
-						},
-						{ triggerTurn: true },
-					);
-					this.ctx.ui.notify(
-						[
-							t(this.repoRoot, "inquiry.notice.sent"),
-							`anchor: ${this.target.kind} ${this.target.id}`,
-							"canonical history: not written",
-							"tool policy: read-only guard active for this turn",
-						].join("\n"),
-						"info",
-					);
-				},
-			});
+			const content = buildInquiryContent(this.target, event, question);
+			const result = await this.inquiryRunner(this.ctx, content);
+			this.ctx.ui.notify(
+				[
+					t(this.repoRoot, "inquiry.notice.sent"),
+					`anchor: ${this.target.kind} ${this.target.id}`,
+					"canonical history: not written",
+					"native resume: not written",
+					result.modelBacked ? "answer source: ephemeral model call" : "answer source: read-only context preview",
+					...(result.error ? [`degraded reason: ${result.error}`] : []),
+					"",
+					result.answer,
+				].join("\n"),
+				result.error ? "warning" : "info",
+			);
+			return { question, answer: result.answer };
 		} finally {
 			this.guard.clear(this.repoRoot);
 		}

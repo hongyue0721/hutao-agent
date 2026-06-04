@@ -4,6 +4,7 @@ import type { SessionEntry } from "../../src/core/session-manager.ts";
 import {
 	EphemeralInquiryFlow,
 	type EphemeralInquiryPromotionHandlers,
+	type EphemeralInquiryRunner,
 	HUTAO_EPHEMERAL_INQUIRY_ATTACHMENT_CUSTOM_TYPE,
 } from "../../src/hutao/ephemeral-inquiry/flow.ts";
 
@@ -11,10 +12,17 @@ interface FakeContextOptions {
 	selections?: string[];
 	inputs?: Array<string | undefined>;
 	entries?: SessionEntry[];
-	onWaitForIdle?: (entries: SessionEntry[]) => void | Promise<void>;
 }
 
-function fakeContext(options: FakeContextOptions): ExtensionCommandContext {
+interface FakeContext {
+	ctx: ExtensionCommandContext;
+	appendEntryMock: ReturnType<typeof vi.fn>;
+	sendMessageMock: ReturnType<typeof vi.fn>;
+	sendUserMessageMock: ReturnType<typeof vi.fn>;
+	waitForIdleMock: ReturnType<typeof vi.fn>;
+}
+
+function fakeContext(options: FakeContextOptions): FakeContext {
 	const selections = [...(options.selections ?? [])];
 	const inputs = [...(options.inputs ?? [])];
 	const entries = options.entries ?? [];
@@ -40,7 +48,15 @@ function fakeContext(options: FakeContextOptions): ExtensionCommandContext {
 		input: vi.fn(async () => inputs.shift()),
 		notify: vi.fn(),
 	};
-	return {
+	const waitForIdleMock = vi.fn(async () => {
+		idle = true;
+	});
+	const appendEntryMock = vi.fn();
+	const sendUserMessageMock = vi.fn();
+	const sendMessageMock = vi.fn(() => {
+		idle = false;
+	});
+	const ctx = {
 		cwd: "/repo",
 		ui,
 		isIdle: () => idle,
@@ -48,36 +64,22 @@ function fakeContext(options: FakeContextOptions): ExtensionCommandContext {
 		sessionManager: {
 			getEntries: () => entries,
 		},
-		waitForIdle: vi.fn(async () => {
-			await options.onWaitForIdle?.(entries);
-			idle = true;
-		}),
-		sendMessage: vi.fn(() => {
-			idle = false;
-		}),
+		waitForIdle: waitForIdleMock,
+		appendEntry: appendEntryMock,
+		sendUserMessage: sendUserMessageMock,
+		sendMessage: sendMessageMock,
 	} as unknown as ExtensionCommandContext;
-}
-
-function assistantEntry(id: string, text: string): SessionEntry {
-	return {
-		type: "message",
-		id,
-		parentId: null,
-		timestamp: new Date().toISOString(),
-		message: {
-			role: "assistant",
-			content: [{ type: "text", text }],
-		},
-	} as SessionEntry;
+	return { ctx, appendEntryMock, sendMessageMock, sendUserMessageMock, waitForIdleMock };
 }
 
 describe("EphemeralInquiryFlow", () => {
 	it("promotes a prompting inquiry with an explicit follow-up message", async () => {
 		const forkPrompting = vi.fn<EphemeralInquiryPromotionHandlers["forkPrompting"]>(async () => undefined);
 		const forkEdit = vi.fn<EphemeralInquiryPromotionHandlers["forkEdit"]>(async () => undefined);
+		const { ctx } = fakeContext({ selections: ["Promote to forkSession"], inputs: ["Continue by adding tests"] });
 		await new EphemeralInquiryFlow({
 			repoRoot: "/repo",
-			ctx: fakeContext({ selections: ["Promote to forkSession"], inputs: ["Continue by adding tests"] }),
+			ctx,
 			target: { kind: "prompting", id: "p_test" },
 			events: [],
 			promotion: { forkPrompting, forkEdit },
@@ -93,9 +95,10 @@ describe("EphemeralInquiryFlow", () => {
 	it("promotes an edit inquiry without sending a follow-up when input is empty", async () => {
 		const forkPrompting = vi.fn<EphemeralInquiryPromotionHandlers["forkPrompting"]>(async () => undefined);
 		const forkEdit = vi.fn<EphemeralInquiryPromotionHandlers["forkEdit"]>(async () => undefined);
+		const { ctx } = fakeContext({ selections: ["Promote to forkSession"], inputs: [""] });
 		await new EphemeralInquiryFlow({
 			repoRoot: "/repo",
-			ctx: fakeContext({ selections: ["Promote to forkSession"], inputs: [""] }),
+			ctx,
 			target: { kind: "edit", id: "e_test" },
 			events: [],
 			promotion: { forkPrompting, forkEdit },
@@ -111,7 +114,7 @@ describe("EphemeralInquiryFlow", () => {
 	it("opens an explicit exit menu when inquiry input is cancelled", async () => {
 		const forkPrompting = vi.fn<EphemeralInquiryPromotionHandlers["forkPrompting"]>(async () => undefined);
 		const forkEdit = vi.fn<EphemeralInquiryPromotionHandlers["forkEdit"]>(async () => undefined);
-		const ctx = fakeContext({
+		const { ctx, sendMessageMock } = fakeContext({
 			selections: ["Ask a read-only question", "Exit inquiry and return to main chat"],
 			inputs: [undefined],
 		});
@@ -125,7 +128,7 @@ describe("EphemeralInquiryFlow", () => {
 		}).run();
 
 		expect(ctx.ui.select).toHaveBeenCalledTimes(2);
-		expect(ctx.sendMessage).not.toHaveBeenCalled();
+		expect(sendMessageMock).not.toHaveBeenCalled();
 		expect(forkPrompting).not.toHaveBeenCalled();
 		expect(forkEdit).not.toHaveBeenCalled();
 		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("canonical history"), "info");
@@ -134,15 +137,14 @@ describe("EphemeralInquiryFlow", () => {
 	it("can continue entering a question after cancelling input", async () => {
 		const forkPrompting = vi.fn<EphemeralInquiryPromotionHandlers["forkPrompting"]>(async () => undefined);
 		const forkEdit = vi.fn<EphemeralInquiryPromotionHandlers["forkEdit"]>(async () => undefined);
-		const entries: SessionEntry[] = [];
-		const ctx = fakeContext({
+		const { ctx, appendEntryMock, sendMessageMock, sendUserMessageMock, waitForIdleMock } = fakeContext({
 			selections: ["Ask a read-only question", "Continue entering question", "Exit inquiry and return to main chat"],
 			inputs: [undefined, "Why did this change?"],
-			entries,
-			onWaitForIdle: () => {
-				entries.push(assistantEntry("a1", "Because it fixed the bug."));
-			},
 		});
+		const inquiryRunner = vi.fn<EphemeralInquiryRunner>(async () => ({
+			answer: "Because the edit preserves trace safety.",
+			modelBacked: true,
+		}));
 
 		await new EphemeralInquiryFlow({
 			repoRoot: "/repo",
@@ -150,10 +152,16 @@ describe("EphemeralInquiryFlow", () => {
 			target: { kind: "edit", id: "e_test" },
 			events: [],
 			promotion: { forkPrompting, forkEdit },
+			inquiryRunner,
 		}).run();
 
-		expect(ctx.sendMessage).toHaveBeenCalledTimes(1);
-		expect(ctx.waitForIdle).toHaveBeenCalledTimes(1);
+		expect(inquiryRunner).toHaveBeenCalledTimes(1);
+		expect(inquiryRunner.mock.calls[0]?.[1]).toContain("Why did this change?");
+		expect(sendMessageMock).not.toHaveBeenCalled();
+		expect(sendUserMessageMock).not.toHaveBeenCalled();
+		expect(appendEntryMock).not.toHaveBeenCalled();
+		expect(waitForIdleMock).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("native resume: not written"), "info");
 		expect(forkEdit).not.toHaveBeenCalled();
 	});
 
@@ -161,7 +169,7 @@ describe("EphemeralInquiryFlow", () => {
 		const forkPrompting = vi.fn<EphemeralInquiryPromotionHandlers["forkPrompting"]>(async () => undefined);
 		const forkEdit = vi.fn<EphemeralInquiryPromotionHandlers["forkEdit"]>(async () => undefined);
 		const entries: SessionEntry[] = [];
-		const ctx = fakeContext({
+		const { ctx, appendEntryMock, sendMessageMock, sendUserMessageMock, waitForIdleMock } = fakeContext({
 			selections: [
 				"Ask a read-only question",
 				"Create forkSession and continue",
@@ -169,10 +177,11 @@ describe("EphemeralInquiryFlow", () => {
 			],
 			inputs: ["Why did this edit happen?", "Now continue safely"],
 			entries,
-			onWaitForIdle: () => {
-				entries.push(assistantEntry("a1", "It happened to preserve trace safety."));
-			},
 		});
+		const inquiryRunner = vi.fn<EphemeralInquiryRunner>(async () => ({
+			answer: "It happened to preserve trace safety.",
+			modelBacked: true,
+		}));
 
 		await new EphemeralInquiryFlow({
 			repoRoot: "/repo",
@@ -180,8 +189,18 @@ describe("EphemeralInquiryFlow", () => {
 			target: { kind: "edit", id: "e_test" },
 			events: [],
 			promotion: { forkPrompting, forkEdit },
+			inquiryRunner,
 		}).run();
 
+		expect(inquiryRunner).toHaveBeenCalledTimes(1);
+		expect(sendMessageMock).not.toHaveBeenCalled();
+		expect(sendUserMessageMock).not.toHaveBeenCalled();
+		expect(appendEntryMock).not.toHaveBeenCalled();
+		expect(waitForIdleMock).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("answer source: ephemeral model call"),
+			"info",
+		);
 		expect(forkEdit).toHaveBeenCalledTimes(1);
 		const options = forkEdit.mock.calls[0]?.[2];
 		expect(options?.followUpMessage).toBe("Now continue safely");

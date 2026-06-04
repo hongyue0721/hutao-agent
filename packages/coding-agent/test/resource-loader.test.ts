@@ -1,7 +1,6 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
@@ -12,6 +11,9 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 import { createDirectoryLinkForTest } from "./link-test-utils.ts";
+import { cleanupTestTempDir, createTestTempDir } from "./temp-utils.ts";
+
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -19,7 +21,7 @@ describe("DefaultResourceLoader", () => {
 	let cwd: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `rl-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = createTestTempDir("rl-test");
 		agentDir = join(tempDir, "agent");
 		cwd = join(tempDir, "project");
 		mkdirSync(agentDir, { recursive: true });
@@ -27,7 +29,7 @@ describe("DefaultResourceLoader", () => {
 	});
 
 	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
+		cleanupTestTempDir(tempDir);
 	});
 
 	describe("reload", () => {
@@ -132,7 +134,7 @@ Project skill`,
 			);
 
 			const baseTheme = JSON.parse(
-				readFileSync(join(process.cwd(), "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
+				readFileSync(join(packageRoot, "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
 			) as { name: string; vars?: Record<string, string> };
 			baseTheme.name = "collision-theme";
 			const userThemePath = join(agentDir, "themes", "collision.json");

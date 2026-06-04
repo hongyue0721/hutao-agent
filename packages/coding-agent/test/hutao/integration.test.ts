@@ -186,6 +186,7 @@ function makeCommandContext(repo: string): ExtensionCommandContext {
 					"View target session": ["View target session", "查看目标 session"],
 					"View Patch": ["View patch", "查看补丁", "查看 patch"],
 					"View original input": ["View original input", "查看原始输入"],
+					"Collapse current node": ["Collapse current node", "折叠当前节点"],
 					"Ask about this prompting in read-only mode": [
 						"Ask about this prompting in read-only mode",
 						"只读询问这个 prompting",
@@ -819,7 +820,7 @@ describe("Hutao integration safety", () => {
 		});
 
 		commandSelections.push("fs_tree_fork", "fs_tree_fork", "View fork source");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
 		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Fork fs_tree_fork edit:");
@@ -842,7 +843,7 @@ describe("Hutao integration safety", () => {
 
 		const revertEventPrefix = String(result.revertEventId).slice(0, 20);
 		commandSelections.push(revertEventPrefix, revertEventPrefix, "View original edit");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
 		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain(`Revert ${revertEventPrefix}`);
@@ -852,7 +853,7 @@ describe("Hutao integration safety", () => {
 		expect(commandNotifications.at(-1)).toContain("file.txt");
 
 		commandSelections.push(revertEventPrefix, revertEventPrefix, "View revert edit");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain(`Edit ${result.revertEditId}`);
 		expect(commandNotifications.at(-1)).toContain(`summary: Reverted edit ${editId}`);
 		expect(commandNotifications.at(-1)).toContain("file.txt");
@@ -894,7 +895,7 @@ describe("Hutao integration safety", () => {
 		});
 
 		commandSelections.push("m_conflict_tree", "m_conflict_tree", "View skipped edits");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
 		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Conflict m_conflict_tree apply_edits conflict");
@@ -905,7 +906,7 @@ describe("Hutao integration safety", () => {
 		expect(commandNotifications.at(-1)).toContain("file.txt");
 
 		commandSelections.push("m_conflict_tree", "m_conflict_tree", "View merge event");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 		expect(commandNotifications.at(-1)).toContain("Merge m_conflict_tree");
 		expect(commandNotifications.at(-1)).toContain("status: conflict");
 	});
@@ -946,7 +947,7 @@ describe("Hutao integration safety", () => {
 		});
 
 		commandSelections.push("m_merge_tree", "m_merge_tree", "View applied edits");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
 		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("Merge m_merge_tree apply_edits completed");
@@ -957,7 +958,32 @@ describe("Hutao integration safety", () => {
 		expect(commandNotifications.at(-1)).toContain("file.txt");
 	});
 
-	it("opens prompting as an interactive tree by default and dispatches selected nodes to details", async () => {
+	it("opens prompting as a current-session flat list with --flat", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		await recordFileEdit(repo, "old-session");
+		const { recorder } = await recordFileEdit(repo, "current-session");
+		const currentPrompting = readSessionEvents(repo, recorder.getSessionId()).find(
+			(event) => event.type === "prompting",
+		);
+		expect(currentPrompting?.id).toBeDefined();
+
+		commandSelections.push(String(currentPrompting?.id).slice(0, 20), "View original input");
+		await promptingCommand("--flat", makeCommandContext(repo));
+
+		expect(commandSelectCalls.at(-2)?.title).toContain(`Current session: ${recorder.getSessionId()}`);
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("change to current-session");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).not.toContain("change to old-session");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("runs=1");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain("edits=1");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).not.toContain("Session sess_");
+		expect(commandSelectCalls.at(-2)?.options.join("\n")).not.toContain("Run r_");
+		expect(commandSelectCalls.at(-1)?.title).toContain("提示操作");
+		expect(commandNotifications.at(-1)).toContain(`Prompting ${currentPrompting?.id}`);
+		expect(commandNotifications.at(-1)).toContain("change to current-session");
+	});
+
+	it("opens the full prompting causality tree by default and keeps --tree compatible", async () => {
 		const repo = makeTempDir();
 		await initRepo(repo);
 		const { recorder, editId } = await recordFileEdit(repo, "tree-default");
@@ -993,11 +1019,50 @@ describe("Hutao integration safety", () => {
 			editId.slice(0, 20),
 			"View Patch",
 		);
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-1)?.title).toContain("修改操作");
 		expect(commandNotifications.at(-1)).toContain(`Edit ${editId}`);
 		expect(commandNotifications.at(-1)).toContain("file.txt");
+	});
+
+	it("colors prompting tree nodes and collapses expanded nodes from the original action menu", async () => {
+		const repo = makeTempDir();
+		await initRepo(repo);
+		const { recorder } = await recordFileEdit(repo, "collapse-tree-node");
+		const prompting = readSessionEvents(repo, recorder.getSessionId()).find((event) => event.type === "prompting");
+		expect(prompting?.id).toBeDefined();
+
+		commandSelections.push(
+			String(prompting?.id).slice(0, 20),
+			String(prompting?.id).slice(0, 20),
+			"Collapse current node",
+			"__stop_after_collapse__",
+		);
+		await promptingCommand("", makeCommandContext(repo));
+
+		expect(commandSelectCalls).toHaveLength(4);
+		expect(commandSelectCalls[0].title).toBe("Hutao prompting tree");
+		const initialTree = commandSelectCalls[0].options.join("\n");
+		expect(initialTree).toContain("\x1b[36m▾ Session");
+		expect(initialTree).toContain("\x1b[35m▸ Prompting");
+		expect(initialTree).not.toContain("Run r_");
+
+		expect(commandSelectCalls[1].title).toBe("Hutao prompting tree");
+		const expandedTree = commandSelectCalls[1].options.join("\n");
+		expect(expandedTree).toContain("\x1b[35m▾ Prompting");
+		expect(expandedTree).toContain("\x1b[34m▸ Run");
+
+		expect(commandSelectCalls[2].title).toContain("提示操作");
+		expect(commandSelectCalls[2].options.join("\n")).toContain("查看原始输入");
+		expect(commandSelectCalls[2].options.join("\n")).toContain("查看相关 runs");
+		expect(commandSelectCalls[2].options.at(-1)).toBe("折叠当前节点");
+
+		expect(commandSelectCalls[3].title).toBe("Hutao prompting tree");
+		const collapsedTree = commandSelectCalls[3].options.join("\n");
+		expect(collapsedTree).toContain("\x1b[35m▸ Prompting");
+		expect(collapsedTree).not.toContain("Run r_");
+		expect(commandNotifications.at(-1)).toContain("No tree node selected.");
 	});
 
 	it("runs read-only inquiry without creating canonical trace facts", async () => {
@@ -1017,23 +1082,17 @@ describe("Hutao integration safety", () => {
 		commandInputs.push("Why did this edit happen?");
 		await promptingCommand("", makeCommandContext(repo));
 
-		expect(commandMessages).toHaveLength(1);
-		expect(commandMessages[0].message.customType).toBe("hutao_ephemeral_read_only_inquiry");
-		expect(commandMessages[0].message.content).toContain("<hutao_ephemeral_read_only_inquiry>");
-		expect(commandMessages[0].message.content).toContain("Do not modify files, do not run tools");
-		expect(commandMessages[0].message.content).toContain("Why did this edit happen?");
-		expect(commandMessages[0].options).toEqual({ triggerTurn: true });
-		expect(commandMessages[0].message.details).toMatchObject({
-			type: "ephemeral_read_only_inquiry",
-			status: "read_only",
-			canonical_history: "not_written",
-			target: { kind: "prompting", id: prompting?.id },
-			question: "Why did this edit happen?",
-		});
+		expect(commandMessages).toHaveLength(0);
 		expect(commandUserMessages).toHaveLength(0);
 		expect(commandAppendedEntries).toHaveLength(0);
 		expect(readSessionEvents(repo, recorder.getSessionId())).toHaveLength(eventsBefore.length);
-		expect(commandNotifications.at(-1)).toContain("canonical history: not written");
+		const inquiryNotice = commandNotifications.find((message) => message.includes("native resume: not written"));
+		expect(inquiryNotice).toBeDefined();
+		expect(inquiryNotice).toContain("canonical history: not written");
+		expect(inquiryNotice).toContain("answer source: read-only context preview");
+		expect(inquiryNotice).toContain("No model selected.");
+		expect(inquiryNotice).toContain("<hutao_ephemeral_read_only_inquiry>");
+		expect(inquiryNotice).toContain("Why did this edit happen?");
 	});
 
 	it("writes full_qa inquiry context into the fresh fork native context without polluting promptings", async () => {
@@ -1044,7 +1103,6 @@ describe("Hutao integration safety", () => {
 			"explain native-linked prompting",
 		);
 		const eventsBefore = readSessionEvents(repo, recorder.getSessionId());
-		commandAssistantReplies.push("This prompting was linked to a native user entry and is safe to explain.");
 
 		commandSelections.push(
 			String(prompting.id).slice(0, 20),
@@ -1057,8 +1115,7 @@ describe("Hutao integration safety", () => {
 
 		await promptingCommand("", makeCommandContext(repo));
 
-		expect(commandMessages).toHaveLength(1);
-		expect(commandMessages[0].message.customType).toBe("hutao_ephemeral_read_only_inquiry");
+		expect(commandMessages).toHaveLength(0);
 		expect(commandUserMessages).toHaveLength(0);
 		expect(commandForkCalls).toHaveLength(1);
 		expect(commandForkCalls[0].entryId).toBe(nativeEntryId);
@@ -1069,9 +1126,8 @@ describe("Hutao integration safety", () => {
 		expect(commandForkMessages[0].message.content).toContain("not a system instruction");
 		expect(commandForkMessages[0].message.content).toContain("not a prompting");
 		expect(commandForkMessages[0].message.content).toContain("Why is this prompting safe to fork?");
-		expect(commandForkMessages[0].message.content).toContain(
-			"This prompting was linked to a native user entry and is safe to explain.",
-		);
+		expect(commandForkMessages[0].message.content).toContain("No model-backed read-only answer was generated");
+		expect(commandForkMessages[0].message.content).toContain("native resume state");
 		expect(commandForkMessages[0].message.details).toMatchObject({
 			type: "fork_context_attachment",
 			source: "ephemeral_inquiry",
@@ -1079,8 +1135,10 @@ describe("Hutao integration safety", () => {
 			trusted: false,
 			anchor: { type: "prompting", id: prompting.id },
 			question: "Why is this prompting safe to fork?",
-			answer: "This prompting was linked to a native user entry and is safe to explain.",
 		});
+		expect(String((commandForkMessages[0].message.details as { answer?: string }).answer)).toContain(
+			"No model-backed read-only answer was generated",
+		);
 		expect(commandForkUserMessages).toEqual([
 			{ content: "Continue with a careful implementation", options: undefined },
 		]);
@@ -1129,7 +1187,7 @@ describe("Hutao integration safety", () => {
 		});
 
 		commandSelections.push(String(prompting?.id).slice(0, 20), "sa_security", "View details");
-		await promptingCommand("", makeCommandContext(repo));
+		await promptingCommand("--tree", makeCommandContext(repo));
 
 		expect(commandSelectCalls.at(-2)?.title).toBe("Hutao prompting tree");
 		expect(commandSelectCalls.at(-2)?.options.join("\n")).toContain(

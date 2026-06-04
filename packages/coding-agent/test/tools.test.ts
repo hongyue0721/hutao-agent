@@ -1,6 +1,5 @@
 import { applyPatch } from "diff";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
@@ -15,6 +14,7 @@ import {
 	createWriteTool,
 } from "../src/index.ts";
 import * as shellModule from "../src/utils/shell.ts";
+import { cleanupTestTempDir, createTestTempDir } from "./temp-utils.ts";
 
 const readTool = createReadTool(process.cwd());
 const writeTool = createWriteTool(process.cwd());
@@ -42,15 +42,15 @@ describe("Coding Agent Tools", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		// Create a unique temporary directory for each test
-		testDir = join(tmpdir(), `coding-agent-test-${Date.now()}`);
-		mkdirSync(testDir, { recursive: true });
+		// Create a unique temporary directory for each test. mkdtemp-based
+		// directories avoid collisions across Vitest workers and simultaneous
+		// Windows/WSL validation runs.
+		testDir = createTestTempDir("coding-agent-test");
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		// Clean up test directory
-		rmSync(testDir, { recursive: true, force: true });
+		cleanupTestTempDir(testDir);
 	});
 
 	describe("read tool", () => {
@@ -821,12 +821,11 @@ describe("edit tool fuzzy matching", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		testDir = join(tmpdir(), `coding-agent-fuzzy-test-${Date.now()}`);
-		mkdirSync(testDir, { recursive: true });
+		testDir = createTestTempDir("coding-agent-fuzzy-test");
 	});
 
 	afterEach(() => {
-		rmSync(testDir, { recursive: true, force: true });
+		cleanupTestTempDir(testDir);
 	});
 
 	it("should match text with trailing whitespace stripped", async () => {
@@ -997,12 +996,11 @@ describe("edit tool CRLF handling", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		testDir = join(tmpdir(), `coding-agent-crlf-test-${Date.now()}`);
-		mkdirSync(testDir, { recursive: true });
+		testDir = createTestTempDir("coding-agent-crlf-test");
 	});
 
 	afterEach(() => {
-		rmSync(testDir, { recursive: true, force: true });
+		cleanupTestTempDir(testDir);
 	});
 
 	it("should match LF oldText against CRLF file content", async () => {

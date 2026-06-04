@@ -23,8 +23,12 @@ import { defaultProcessActionRegistrations } from "./process-actions/default-act
 import { HutaoProcessActionExecutor, processActionTargetFromNode } from "./process-actions/executor.ts";
 import { selectProcessAction } from "./process-actions/menu.ts";
 import { HutaoProcessActionRegistry } from "./process-actions/registry.ts";
-import type { HutaoProcessActionCommandHandlers, HutaoProcessActionTarget } from "./process-actions/types.ts";
-import { selectCollapsibleProcessTreeNode } from "./process-tree/collapsible.ts";
+import type {
+	HutaoProcessAction,
+	HutaoProcessActionCommandHandlers,
+	HutaoProcessActionTarget,
+} from "./process-actions/types.ts";
+import { type HutaoCollapsibleProcessTreeNode, selectCollapsibleProcessTreeNode } from "./process-tree/collapsible.ts";
 import {
 	conflictRelatedEditIds,
 	conflictSourceSessionId,
@@ -34,6 +38,12 @@ import { forkParentSessionId, forkSessionId, forkSourceId, forkSourceType } from
 import { revertEditId, revertedEditId, revertRelatedEditIds } from "./process-tree/revert-model.ts";
 import type { HutaoProcessTreeNode } from "./process-tree/types.ts";
 import { buildPromptingTreeNodes, renderPromptingTree } from "./prompting-tree.ts";
+import {
+	buildPromptingSessionView,
+	renderPromptingSessionViewEmptyLines,
+	renderPromptingSessionViewHeader,
+	renderPromptingSessionViewLabel,
+} from "./prompting-view.ts";
 import { readAllEvents } from "./read-model.ts";
 import { RevertManager } from "./revert-manager.ts";
 import { SessionRegistry } from "./session-registry.ts";
@@ -51,6 +61,15 @@ import {
 import { getHutaoTraceStatus, stageHutaoTrace } from "./trace-stager.ts";
 
 const defaultProcessActionRegistry = new HutaoProcessActionRegistry(defaultProcessActionRegistrations);
+const TREE_COLLAPSE_ACTION_ID = "treeCollapseCurrentNode";
+
+function treeCollapseAction(): HutaoProcessAction {
+	return {
+		id: TREE_COLLAPSE_ACTION_ID,
+		labelKey: "process.tree.action.collapseCurrent",
+		order: 10_000,
+	};
+}
 
 function readEvents(repoRoot: string): HutaoEvent[] {
 	return readAllEvents(repoRoot);
@@ -238,14 +257,47 @@ async function runPromptingTree(
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
 	const nodes = buildPromptingTreeNodes(repoRoot, events, promptings);
-	const selected = await selectCollapsibleProcessTreeNode({
-		title: "Hutao prompting tree",
-		nodes,
-		select: (title, labels) => ctx.ui.select(title, labels),
+	let expandedNodeIds = new Set<string>();
+	while (true) {
+		const selected = await selectCollapsibleProcessTreeNode({
+			title: "Hutao prompting tree",
+			nodes,
+			select: (title, labels) => ctx.ui.select(title, labels),
+			options: { expandedNodeIds },
+		});
+		expandedNodeIds = new Set(selected.expandedNodeIds);
+		if (selected.status !== "selected") {
+			return notify(ctx, "Hutao prompting", [promptings.length ? "No tree node selected." : "No promptings found."]);
+		}
+		const result = await runProcessTreeNodeAction(selected.node, repoRoot, events, ctx);
+		if (result !== "collapse_current") return;
+		expandedNodeIds.delete(selected.node.nodeId);
+	}
+}
+
+async function runPromptingSessionView(
+	repoRoot: string,
+	events: HutaoEvent[],
+	promptings: HutaoEvent[],
+	ctx: ExtensionCommandContext,
+	options: { sessionFilter?: string; allMode?: boolean } = {},
+): Promise<void> {
+	const registry = new SessionRegistry(repoRoot);
+	const view = buildPromptingSessionView(events, {
+		currentSessionId: options.allMode ? undefined : registry.readCurrentSessionId(),
+		sessionFilter: options.sessionFilter,
+		allMode: options.allMode,
+		promptings,
+		limit: 30,
 	});
-	if (selected.status !== "selected")
-		return notify(ctx, "Hutao prompting", [promptings.length ? "No tree node selected." : "No promptings found."]);
-	return runProcessNodeAction(selected.node, repoRoot, events, ctx);
+	const selected = await selectItem(
+		ctx,
+		`Hutao promptings - ${renderPromptingSessionViewHeader(view)[0]}`,
+		view.items,
+		(item) => renderPromptingSessionViewLabel(item),
+	);
+	if (!selected) return notify(ctx, "Hutao prompting", renderPromptingSessionViewEmptyLines(view));
+	return runPromptingAction(selected.prompting, repoRoot, ctx);
 }
 
 function pushEventList(
@@ -995,12 +1047,15 @@ function makeProcessActionHandlers(
 	};
 }
 
+type TreeProcessActionResult = "executed" | "collapse_current";
+
 async function runProcessActionTarget(
 	target: HutaoProcessActionTarget,
 	repoRoot: string,
 	events: HutaoEvent[],
 	ctx: ExtensionCommandContext,
-): Promise<void> {
+	options: { extraActions?: HutaoProcessAction[] } = {},
+): Promise<TreeProcessActionResult> {
 	const node: HutaoProcessTreeNode = target.node ?? {
 		kind: target.kind,
 		id: target.id,
@@ -1014,8 +1069,14 @@ async function runProcessActionTarget(
 		ctx,
 		handlers: makeProcessActionHandlers(repoRoot, events, ctx),
 	});
-	const actions = defaultProcessActionRegistry.getActions(node, { repoRoot, events });
-	if (actions.length === 0) return executor.executeNodeDefault(node);
+	const actions = [
+		...defaultProcessActionRegistry.getActions(node, { repoRoot, events }),
+		...(options.extraActions ?? []),
+	];
+	if (actions.length === 0) {
+		await executor.executeNodeDefault(node);
+		return "executed";
+	}
 	const titleKey = defaultProcessActionRegistry.getTitleKey(node);
 	const action = await selectProcessAction(
 		ctx,
@@ -1023,17 +1084,24 @@ async function runProcessActionTarget(
 		titleKey ? t(repoRoot, titleKey) : `Hutao ${node.kind} actions`,
 		actions,
 	);
-	if (!action) return notify(ctx, `Hutao ${node.kind}`, [t(repoRoot, "menu.noAction")]);
-	return executor.execute(action, target);
+	if (!action) {
+		notify(ctx, `Hutao ${node.kind}`, [t(repoRoot, "menu.noAction")]);
+		return "executed";
+	}
+	if (action.id === TREE_COLLAPSE_ACTION_ID) return "collapse_current";
+	await executor.execute(action, target);
+	return "executed";
 }
 
-async function runProcessNodeAction(
-	node: HutaoProcessTreeNode,
+async function runProcessTreeNodeAction(
+	node: HutaoCollapsibleProcessTreeNode,
 	repoRoot: string,
 	events: HutaoEvent[],
 	ctx: ExtensionCommandContext,
-): Promise<void> {
-	return runProcessActionTarget(processActionTargetFromNode(node), repoRoot, events, ctx);
+): Promise<TreeProcessActionResult> {
+	return runProcessActionTarget(processActionTargetFromNode(node), repoRoot, events, ctx, {
+		extraActions: node.expandable && node.expanded ? [treeCollapseAction()] : [],
+	});
 }
 
 function eventTarget(kind: "prompting" | "edit", event: HutaoEvent): HutaoProcessActionTarget {
@@ -1046,7 +1114,7 @@ function eventTarget(kind: "prompting" | "edit", event: HutaoEvent): HutaoProces
 }
 
 async function runSessionAction(sessionId: string, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
-	return runProcessActionTarget(
+	await runProcessActionTarget(
 		{
 			kind: "session",
 			id: sessionId,
@@ -1063,11 +1131,11 @@ async function runPromptingAction(
 	repoRoot: string,
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
-	return runProcessActionTarget(eventTarget("prompting", prompting), repoRoot, readEvents(repoRoot), ctx);
+	await runProcessActionTarget(eventTarget("prompting", prompting), repoRoot, readEvents(repoRoot), ctx);
 }
 
 async function runEditAction(edit: HutaoEvent, repoRoot: string, ctx: ExtensionCommandContext): Promise<void> {
-	return runProcessActionTarget(eventTarget("edit", edit), repoRoot, readEvents(repoRoot), ctx);
+	await runProcessActionTarget(eventTarget("edit", edit), repoRoot, readEvents(repoRoot), ctx);
 }
 
 export async function sessionCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -1160,7 +1228,17 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 	const commitFilter = getFlagValue(parts, "--commit");
 	const fileFilter = getFlagValue(parts, "--file");
 	const listMode = parts.includes("--list");
-	const detailQuery = parts.find((part) => !part.startsWith("--") && part !== "search");
+	const flatMode = parts.includes("--flat");
+	const treeMode = parts.includes("--tree");
+	const allMode = parts.includes("--all");
+	const detailQuery = parts.find(
+		(part, index) =>
+			!part.startsWith("--") &&
+			part !== "search" &&
+			parts[index - 1] !== "--session" &&
+			parts[index - 1] !== "--commit" &&
+			parts[index - 1] !== "--file",
+	);
 	if (sessionFilter) promptings = promptings.filter((event) => String(event.session_id).startsWith(sessionFilter));
 	if (commitFilter) {
 		const projection = buildGitCommitProjection(events, commitFilter, commitFilter);
@@ -1179,7 +1257,13 @@ export async function promptingCommand(args: string, ctx: ExtensionCommandContex
 		promptings = promptings.filter((event) => eventText(event).includes(searchText));
 	}
 	if (!query || query.startsWith("--") || parts[0] === "search") {
-		if (!listMode) return runPromptingTree(repoRoot, events, promptings, ctx);
+		const filteredListMode = allMode || Boolean(sessionFilter || commitFilter || fileFilter || parts[0] === "search");
+		if (flatMode || (!treeMode && filteredListMode))
+			return runPromptingSessionView(repoRoot, events, promptings, ctx, {
+				sessionFilter,
+				allMode: filteredListMode && !sessionFilter,
+			});
+		if (treeMode || !listMode) return runPromptingTree(repoRoot, events, promptings, ctx);
 		const selected = await selectItem(
 			ctx,
 			t(repoRoot, "prompting.select.title"),
